@@ -1,0 +1,9 @@
+.section {
+  background: none
+}
+
+@media screen and (max-width: 768px) {
+  .description {
+    text-align: center
+  }
+}

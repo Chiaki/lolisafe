@@ -1,8 +1,22 @@
+{% set metaTitle = "No-JS uploader" %}
+{% set metaUrl = '/nojs' %}
+
 {% extends "_layout.njk" %}
+
+{% set private = config.private %}
+{% set disabledMessage -%}
+  {%- if config.enableUserAccounts -%}
+  Anonymous upload is disabled. Log in to upload.
+  {%- else -%}
+  Running in private mode. Log in to upload.
+  {%- endif %}
+{%- endset %}
+{% set maxSizeInt = config.uploads.maxSize | int %}
+{% set noJsMaxSizeInt = config.cloudflare.noJsMaxSize | int %}
 
 {% block stylesheets %}
 {{ super() }}
-<link rel="stylesheet" href="css/home.css?v={{ globals.v1 }}">
+<link rel="stylesheet" href="css/home.css{{ versions[1] }}">
 {% endblock %}
 
 {% block content %}
@@ -11,30 +25,36 @@
   <div class="hero-body">
     <div class="container has-text-centered">
       <p id="b">
-        <img class="logo" alt="logo" src="images/logo_smol.png?v={{ globals.v2 }}">
+        <img class="logo" alt="logo" src="images/logo_smol.png{{ versions[2] }}">
       </p>
       <h1 class="title">{{ globals.name }}</h1>
       <h2 class="subtitle">{{ globals.home_subtitle | safe }}</h2>
 
-      <h3 class="subtitle" id="maxFileSize">
-        Maximum upload size per file is {{ renderOptions.maxFileSize }}
+      <h3 class="subtitle" id="maxSize">
+        Maximum total size per upload attempt is {{ noJsMaxSizeInt or maxSizeInt }} MB
       </h3>
 
       <div class="columns is-gapless">
         <div class="column is-hidden-mobile"></div>
         <div class="column">
-          <p class="subtitle" style="font-size: 1rem">
-            Files uploaded through this No-JS uploader will not be associated to your account, if you have any.
-          </p>
-          {% if renderOptions.uploadDisabled -%}
-          <a class="button is-danger" style="display: flex" href="auth">{{ renderOptions.uploadDisabled }}</a>
+          {% if private -%}
+          <a class="button is-danger is-outlined is-fullwidth" href="auth">
+            {{ disabledMessage }}
+          </a>
           {%- else -%}
           <form id="form" class="field" action="" method="post" enctype="multipart/form-data">
             <div class="field">
-              <input type="file" name="files[]" multiple="multiple" style="width: 100%">
+              <p class="control">
+                <input type="file" class="is-fullwidth" name="files[]" multiple="multiple" required="required">
+              </p>
             </div>
             <div class="field">
-              <input type="submit" class="button is-danger" value="Upload" style="width: 100%">
+              <p class="control">
+                <input type="submit" class="button is-danger is-outlined is-fullwidth" value="Upload">
+              </p>
+              <p class="help">
+                Files uploaded through this form will not be associated with your account, if you have any.
+              </p>
             </div>
           </form>
           {%- endif %}
@@ -42,13 +62,13 @@
           <div class="field uploads nojs">
             {% for file in files -%}
             <div class="field">
-              <p class="name is-unselectable">{{ file.original }}</p>
+              <p class="name">{{ file.original }}</p>
               {% if errorMessage -%}
-              <p class="error">{{ errorMessage | safe }}</p>
+              <p class="error">{{ errorMessage }}</p>
               {%- endif %}
               {% if file.url -%}
               <p class="link">
-                <a href="{{ file.url }}" target="_blank" rel="noopener">{{ file.url | safe }}</a>
+                <a href="{{ file.url }}" target="_blank" rel="noopener">{{ file.url }}</a>
               </p>
               {%- endif %}
             </div>

@@ -1,17 +1,20 @@
-const config = require('./../config')
 const routes = require('express').Router()
-const uploadController = require('./../controllers/uploadController')
 const albumsController = require('./../controllers/albumsController')
-const tokenController = require('./../controllers/tokenController')
 const authController = require('./../controllers/authController')
+const tokenController = require('./../controllers/tokenController')
+const uploadController = require('./../controllers/uploadController')
 const utilsController = require('./../controllers/utilsController')
+const config = require('./../config')
 
 routes.get('/check', (req, res, next) => {
   return res.json({
     private: config.private,
     enableUserAccounts: config.enableUserAccounts,
-    maxFileSize: config.uploads.maxSize,
-    chunkSize: config.uploads.chunkSize
+    maxSize: config.uploads.maxSize,
+    chunkSize: config.uploads.chunkSize,
+    temporaryUploadAges: config.uploads.temporaryUploadAges,
+    fileIdentifierLength: config.uploads.fileIdentifierLength,
+    stripTags: config.uploads.stripTags
   })
 })
 
@@ -46,6 +49,7 @@ routes.get('/users', (req, res, next) => authController.listUsers(req, res, next
 routes.get('/users/:page', (req, res, next) => authController.listUsers(req, res, next))
 routes.post('/users/edit', (req, res, next) => authController.editUser(req, res, next))
 routes.post('/users/disable', (req, res, next) => authController.disableUser(req, res, next))
+routes.post('/users/delete', (req, res, next) => authController.deleteUser(req, res, next))
 routes.get('/stats', (req, res, next) => utilsController.stats(req, res, next))
 
 module.exports = routes

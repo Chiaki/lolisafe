@@ -106,6 +106,67 @@ module.exports = {
   trustProxy: true,
 
   /*
+    Rate limits.
+    Please be aware that these apply to all users, including site owners.
+    https://github.com/nfriedly/express-rate-limit#configuration-options
+  */
+  rateLimits: [
+    {
+      // 10 requests in 1 second
+      routes: [
+        '/api/'
+      ],
+      config: {
+        windowMs: 1000,
+        max: 10,
+        message: {
+          success: false,
+          description: 'Rate limit reached, please try again in a while.'
+        }
+      }
+    },
+    {
+      // 2 requests in 5 seconds
+      routes: [
+        '/api/login',
+        '/api/register'
+      ],
+      config: {
+        windowMs: 5 * 1000,
+        max: 2,
+        message: {
+          success: false,
+          description: 'Rate limit reached, please try again in 5 seconds.'
+        }
+      }
+    },
+    {
+      // 4 requests in 30 seconds
+      routes: [
+        '/api/album/zip'
+      ],
+      config: {
+        windowMs: 30 * 1000,
+        max: 4
+      }
+    },
+    {
+      // 1 request in 60 seconds
+      routes: [
+        '/api/tokens/change'
+      ],
+      config: {
+        windowMs: 60 * 1000,
+        max: 1,
+        message: {
+          success: false,
+          description: 'Rate limit reached, please try again in 60 seconds.'
+        }
+      }
+    }
+  ],
+
+  /*
     Uploads config.
   */
   uploads: {
@@ -147,7 +208,7 @@ module.exports = {
      Disclaimer message that will be printed underneath the URL uploads form.
      Supports HTML. Be safe though.
     */
-    urlDisclaimerMessage: 'URL uploads are being proxied by <a href="https://duckduckgo.com/" target="_blank" rel="noopener">DuckDuckGo</a>. The proxy can only process direct links, and generally it can only proxy images.',
+    urlDisclaimerMessage: 'URL uploads are being proxied by <a href="https://duckduckgo.com/" target="_blank" rel="noopener">DuckDuckGo</a>.',
 
     /*
      Filter mode for URL uploads.
@@ -156,7 +217,7 @@ module.exports = {
      The rest are paired with urlExtensionsFilter option below and should be self-explanatory.
      When this is not set to any of the 3 values, this will fallback to 'inherit'.
     */
-    urlExtensionsFilterMode: 'inherit',
+    urlExtensionsFilterMode: 'whitelist',
 
     /*
      Mainly intended for URL proxies that only support certain extensions.
@@ -165,18 +226,79 @@ module.exports = {
      Queries and segments in the URLs will be bypassed.
      NOTE: Can not be empty when using either 'blacklist' or 'whitelist' mode.
     */
-    urlExtensionsFilter: [],
+    urlExtensionsFilter: [
+      '.webp',
+      '.jpg',
+      '.jpeg',
+      '.bmp',
+      '.gif',
+      '.png',
+      '.tiff',
+      '.tif',
+      '.svg'
+    ],
+
+    /*
+      An array of allowed ages for uploads (in hours).
+
+      Default age will be the value at the very top of the array.
+      If the array is populated but do not have a zero value,
+      permanent uploads will be rejected.
+      This only applies to new files uploaded after enabling the option.
+
+      If the array is empty or is set to falsy value, temporary uploads
+      feature will be disabled, and all uploads will be permanent (original behavior).
+
+      When temporary uploads feature is disabled, any existing temporary uploads
+      will not ever be automatically deleted, since the safe will not start the
+      periodical checkup task.
+    */
+    temporaryUploadAges: [
+      0, // permanent
+      1 / 60 * 15, // 15 minutes
+      1 / 60 * 30, // 30 minutes
+      1, // 1 hour
+      6, // 6 hours
+      12, // 12 hours
+      24, // 24 hours (1 day)
+      24 * 2, // 48 hours (2 days)
+      24 * 3, // 72 hours (3 days)
+      24 * 4, // 96 hours (4 days)
+      24 * 5, // 120 hours (5 days)
+      24 * 6, // 144 hours (6 days)
+      24 * 7 // 168 hours (7 days)
+    ],
+
+    /*
+      Interval of the periodical check up tasks for temporary uploads (in milliseconds).
+      NOTE: Set to falsy value if you prefer to use your own external script.
+    */
+    temporaryUploadsInterval: 1 * 60000, // 1 minute
 
     /*
       Scan files using ClamAV through clamd.
+      https://github.com/NingLin-P/clamdjs#scannerscanfilepath-timeout-chunksize
+
+      groupBypass: Name of the lowest ranked group whose files will not be scanned.
+      Lowest ranked meanning that group AND any groups higher than it are included.
+      Example: 'moderator' = moderators, admins & superadmins.
+      More about groups at controllers/permissionController.js.
     */
     scan: {
       enabled: false,
       ip: '127.0.0.1',
       port: 3310,
       timeout: 180 * 1000,
-      chunkSize: 64 * 1024
+      chunkSize: 64 * 1024,
+      groupBypass: 'admin'
     },
+
+    /*
+      Store uploader's IPs into the database.
+      NOTE: Dashboard's Manage Uploads will display IP column regardless of whether
+      this is set to true or false.
+    */
+    storeIP: true,
 
     /*
       Chunk size for chunk uploads. Needs to be in MB.
@@ -190,39 +312,32 @@ module.exports = {
 
     /*
       The length of the randomly generated identifier for uploaded files.
-      If "userChangeable" is set to true, registered users will be able to change
-      their preferred length from the dashboard. The allowed range will be set
-      by "min" and "max". Otherwise it will use "default".
-
-      It's possible to have "default" be outside of the "min" and "max" range,
-      but be aware that once a user has changed their preferred length to be somewhere
-      within the range, they will no longer be able to restore it back to "default".
+      If "force" is set to true, files will always use "default".
     */
-    fileLength: {
+    fileIdentifierLength: {
       min: 4,
       max: 32,
-      default: 32,
-      userChangeable: false
+      default: 8,
+      force: false
     },
 
     /*
       Cache file identifiers.
 
       They will be used for stricter collision checks, such that a single identifier
-      may not be used by more than a single file (e.i. if "abcd.jpg" already exists, a new PNG
+      may not be used by more than a single file (e.g. if "abcd.jpg" already exists, a new PNG
       file may not be named as "abcd.png").
 
-      If this is enabled, the safe will then attempt to read file list of the uploads directory
-      during first launch, parse the names, then cache the identifiers into memory.
-      Its downside is that it will use a bit more memory, generally a few MBs increase
-      on a safe with over >10k uploads.
+      If this is enabled, the safe will query files from the database during first launch,
+      parse their names, then cache the identifiers into memory.
+      Its downside is that it will use a bit more memory.
 
       If this is disabled, collision check will become less strict.
-      As in, the same identifier may be used by multiple different extensions (e.i. if "abcd.jpg"
+      As in, the same identifier may be used by multiple different extensions (e.g. if "abcd.jpg"
       already exists, new files can be possibly be named as "abcd.png", "abcd.mp4", etc).
       Its downside will be, in the rare chance that multiple image/video files are sharing the same
       identifier, they will end up with the same thumbnail in dashboard, since thumbnails will
-      only be saved as PNG in storage (e.i. "abcd.jpg" and "abcd.png" will share a single thumbnail
+      only be saved as PNG in storage (e.g. "abcd.jpg" and "abcd.png" will share a single thumbnail
       named "abcd.png" in thumbs directory, in which case, the file that's uploaded the earliest will
       be the source for the thumbnail).
 
@@ -246,10 +361,35 @@ module.exports = {
     /*
       Thumbnails are only used in the dashboard and album's public pages.
       You need to install a separate binary called ffmpeg (https://ffmpeg.org/) for video thumbnails.
+      NOTE: Placeholder defaults to 'public/images/unavailable.png'.
     */
     generateThumbs: {
       image: true,
-      video: false
+      video: false,
+      placeholder: null
+    },
+
+    /*
+      Strip tags (e.g. EXIF).
+
+      "default" decides whether to strip tags or not by default,
+      as the behavior can be configured by users from home uploader's Config tab.
+      If "force" is set to true, the default behavior will be enforced.
+
+      "video" decides whether to also strip tags of video files
+      (of course only if the default behavior is to strip tags).
+      However, this also requires ffmpeg (https://ffmpeg.org/),
+      and is still experimental (thus use at your own risk!).
+
+      NOTE: Other than setting "default" to false, and "force" to true,
+      you can also set stripTags option itself to any falsy value to completely
+      disable this feature. This will also remove the option from
+      home uploader's Config tab, as the former would only grey out the option.
+    */
+    stripTags: {
+      default: false,
+      video: false,
+      force: false
     },
 
     /*
@@ -257,7 +397,20 @@ module.exports = {
       The file is generated when the user clicks the download button in the view
       and is re-used if the album has not changed between download requests.
     */
-    generateZips: true
+    generateZips: true,
+
+    /*
+      JSZip's options to use when generating album ZIPs.
+      https://stuk.github.io/jszip/documentation/api_jszip/generate_async.html
+      NOTE: Changing this option will not re-generate existing ZIPs.
+    */
+    jsZipOptions: {
+      streamFiles: true,
+      compression: 'DEFLATE',
+      compressionOptions: {
+        level: 1
+      }
+    }
   },
 
   /*

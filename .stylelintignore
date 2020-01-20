@@ -1,0 +1,4 @@
+dist/*
+dist-dev/*
+public/libs/*
+src/libs/*

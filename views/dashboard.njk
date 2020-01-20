@@ -1,44 +1,31 @@
+{% set metaTitle = "Dashboard" %}
+{% set metaUrl = '/dashboard' %}
+
 {% extends "_layout.njk" %}
 
 {% block stylesheets %}
 {{ super() }}
-<link rel="stylesheet" href="libs/fontello/fontello.css?v={{ globals.v3 }}">
-<link rel="stylesheet" href="css/sweetalert.css?v={{ globals.v1 }}">
-<link rel="stylesheet" href="css/dashboard.css?v={{ globals.v1 }}">
+<link rel="stylesheet" href="libs/fontello/fontello.css{{ versions[1] }}">
+<link rel="stylesheet" href="css/sweetalert.css{{ versions[1] }}">
+<link rel="stylesheet" href="css/thumbs.css{{ versions[1] }}">
+<link rel="stylesheet" href="css/dashboard.css{{ versions[1] }}">
 {% endblock %}
 
 {% block scripts %}
 {{ super() }}
-<script src="libs/sweetalert/sweetalert.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/axios/axios.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/clipboard.js/clipboard.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/lazyload/lazyload.min.js?v={{ globals.v3 }}"></script>
-<script src="js/dashboard.js?v={{ globals.v1 }}"></script>
-<script src="js/sharex.js?v={{ globals.v1 }}"></script>
+<script src="libs/sweetalert/sweetalert.min.js{{ versions[3] }}"></script>
+<script src="libs/axios/axios.min.js{{ versions[3] }}"></script>
+<script src="libs/clipboard.js/clipboard.min.js{{ versions[3] }}"></script>
+<script src="libs/lazyload/lazyload.min.js{{ versions[3] }}"></script>
+{# Polyfill smooth scroll for older browsers #}
+<script src="libs/smoothscroll/smoothscroll.min.js{{ versions[3] }}"></script>
+<script src="js/dashboard.js{{ versions[1] }}"></script>
+<script src="js/misc/utils.js{{ versions[1] }}"></script>
 {% endblock %}
 
 {% block content %}
 {{ super() }}
-{#
-<!-- This isn't even being used apparently -->
-<section id="auth" class="hero is-light is-fullheight">
-  <div class="hero-body">
-    <div class="container">
-      <h1 class="title">
-        Admin dashboard
-      </h1>
-      <h2 class="subtitle">
-        <p class="control has-addons">
-          <input id="token" class="input is-danger" type="text" placeholder="Your admin token">
-          <a id="tokenSubmit" class="button is-danger is-outlined">Check</a>
-        </p>
-      </h2>
-    </div>
-  </div>
-</section>
-#}
-
-<section id="dashboard" class="section">
+<section id="dashboard" class="section is-hidden">
   <div id="panel" class="container">
     <h1 class="title">
       Dashboard
@@ -52,64 +39,62 @@
       <div class="column is-one-quarter">
         <aside id="menu" class="menu">
           <p class="menu-label">General</p>
-          <ul class="menu-list">
+          <ul class="menu-list is-unselectable">
             <li>
-              <a href=".">Frontpage</a>
+              <a href="." class="is-relative">Frontpage</a>
             </li>
             <li>
-              <a id="itemUploads">Uploads</a>
+              <a id="itemUploads" class="is-relative">Uploads</a>
             </li>
             <li>
-              <a id="itemDeleteByNames">Delete by names</a>
+              <a id="itemDeleteUploadsByNames" class="is-relative">Delete uploads by names</a>
             </li>
           </ul>
           <p class="menu-label">Albums</p>
-          <ul class="menu-list">
+          <ul class="menu-list is-unselectable">
             <li>
-              <a id="itemManageGallery">Manage your albums</a>
+              <a id="itemManageAlbums" class="is-relative">Manage your albums</a>
             </li>
             <li>
               <ul id="albumsContainer"></ul>
             </li>
           </ul>
-          <p class="menu-label">Administration</p>
-          <ul class="menu-list">
+          <p id="itemLabelAdmin" class="menu-label is-hidden">Administration</p>
+          <ul id="itemListAdmin" class="menu-list is-unselectable is-hidden">
             <li>
-              <a id="itemServerStats" disabled>Statistics</a>
+              <a id="itemStatistics" class="is-relative is-hidden">Statistics</a>
             </li>
             <li>
-              <a id="itemManageUploads" disabled>Manage uploads</a>
+              <a id="itemManageUploads" class="is-relative is-hidden">Manage uploads</a>
             </li>
             <li>
-              <a id="itemManageUsers" disabled>Manage users</a>
+              <a id="itemManageUsers" class="is-relative is-hidden">Manage users</a>
             </li>
           </ul>
           <p class="menu-label">Configuration</p>
-          <ul class="menu-list">
+          <ul class="menu-list is-unselectable">
             <li>
-              <a id="ShareX">ShareX user profile</a>
+              <a id="ShareX" class="is-relative">ShareX user profile</a>
             </li>
             <li>
-              <a id="itemFileLength">File name length</a>
+              <a id="itemManageToken" class="is-relative">Manage your token</a>
             </li>
             <li>
-              <a id="itemTokens">Manage your token</a>
+              <a id="itemChangePassword" class="is-relative">Change your password</a>
             </li>
             <li>
-              <a id="itemPassword">Change your password</a>
-            </li>
-            <li>
-              <a id="itemLogout">Logout</a>
+              <a id="itemLogout" class="is-relative">Logout</a>
             </li>
           </ul>
         </aside>
       </div>
       <div id="page" class="column has-text-centered is-third-quarters">
-        <img alt="logo" src="images/logo.png?v={{ globals.v2 }}">
+        <img alt="logo" src="images/logo.png{{ versions[2] }}">
       </div>
     </div>
   </div>
 </section>
 
+{% include "_partial/loader.njk" %}
 {% include "_partial/noscript.njk" %}
 {% endblock %}

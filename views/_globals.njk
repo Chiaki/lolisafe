@@ -1,30 +1,16 @@
 {% set name = "safe.fiery.me" %}
-{% set root = "https://safe.fiery.me" %}
 {% set motto = "A small safe worth protecting." %}
 {% set description = "A pomf-like file uploading service that doesn't suck." %}
 {% set keywords = "upload,lolisafe,file,images,hosting,bobby,fiery" %}
 
+{# Used in home.njk and nojs.njk #}
 {% set home_subtitle = "A <strong>modern</strong> self-hosted file upload service" %}
 
-{% set google_site_verification = null %}
-
 {#
-  This will be appended to the URLs of static files (CSS, JS, images, etc),
-  and should be changed on every updates to make sure clients load the very latest version of them.
-  v1: CSS and JS files (lolisafe).
-  v2: Images and config files (manifest.json, browserconfig.xml, etc).
-  v3: CSS and JS files (libs such as bulma, lazyload, etc).
-  v4: Renders in /public/render/* directories (to be used by render.js).
-#}
-{% set v1 = "VAH8ougx12" %}
-{% set v2 = "hiboQUzAzp" %}
-{% set v3 = "DKoamSTKbO" %}
-{% set v4 = "43gxmxi7v8" %}
-
-{#
-  These will be the links in the homepage and the No-JS uploader.
-  You may remove icons by changing "home_icons" to false.
-  It will then automatically use "attrs.title" as the display text.
+  These are the footer links in the homepage and the No-JS uploader (home.njk & nojs.njk respectively).
+  In the homepage uploader, they will be displayed as icons,
+  but you can choose to display them as texts by setting "home_icons" to false.
+  It will then use the text in "attrs.title" of each links.
   Note: No-JS uploader page will have icons disabled by default (it will also not load fontello.css).
 #}
 {% set home_icons = true %}
@@ -38,14 +24,14 @@
   },
   {
     attrs: {
-      title: 'Blog',
+      title: 'Blog (Gatsby)',
       href: 'https://blog.fiery.me'
     },
-    icon: 'icon-archive icon-2x'
+    icon: 'icon-gatsby icon-2x'
   },
   {
     attrs: {
-      title: 'PrivateBin',
+      title: 'Paste (PrivateBin)',
       href: 'https://paste.fiery.me'
     },
     icon: 'icon-privatebin icon-2x'
@@ -53,10 +39,19 @@
   {
     attrs: {
       id: 'ShareX',
-      title: 'ShareX',
+      title: 'ShareX user profile',
       href: 'https://safe.fiery.me/safe.fiery.me.sxcu?v=' + v2
     },
     icon: 'icon-sharex icon-2x'
+  },
+  {
+    attrs: {
+      title: 'Firefox extension',
+      href: 'https://addons.mozilla.org/en-US/firefox/addon/lolisafe/',
+      target: '_blank',
+      rel: 'noopener'
+    },
+    icon: 'icon-firefox icon-2x'
   },
   {
     attrs: {
@@ -66,15 +61,6 @@
       rel: 'noopener'
     },
     icon: 'icon-chrome icon-2x'
-  },
-  {
-    attrs: {
-      title: 'Firefox extension',
-      href: 'https://github.com/BobbyWibowo/loli-safe-extension/releases',
-      target: '_blank',
-      rel: 'noopener'
-    },
-    icon: 'icon-firefox icon-2x'
   },
   {
     attrs: {

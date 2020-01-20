@@ -1,30 +1,31 @@
 {% extends "_layout.njk" %}
 
-{% block endmeta %}
-{{ super() }}
-{% if globals.google_site_verification %}
-<meta name="google-site-verification" content="{{ globals.google_site_verification }}" />
-{% endif %}
-{% endblock %}
+{% set maxSizeInt = config.uploads.maxSize | int %}
+{% set urlMaxSizeInt = config.uploads.urlMaxSize | int %}
+{% set urlDisclaimerMessage = config.uploads.urlDisclaimerMessage %}
+{% set urlExtensionsFilterMode = config.uploads.urlExtensionsFilterMode %}
+{% set urlExtensionsFilter = config.uploads.urlExtensionsFilter %}
+{% set urlExtensionsFilterEnabled = urlExtensionsFilterMode and urlExtensionsFilterMode !== 'inherit' and urlExtensionsFilter.length %}
+{% set temporaryUploadAges = config.uploads.temporaryUploadAges %}
 
 {% block stylesheets %}
 {{ super() }}
-<link rel="stylesheet" href="libs/fontello/fontello.css?v={{ globals.v3 }}">
-<link rel="stylesheet" href="css/sweetalert.css?v={{ globals.v1 }}">
-<link rel="stylesheet" href="css/home.css?v={{ globals.v1 }}">
+<link rel="stylesheet" href="libs/fontello/fontello.css{{ versions[1] }}">
+<link rel="stylesheet" href="css/sweetalert.css{{ versions[1] }}">
+<link rel="stylesheet" href="css/home.css{{ versions[1] }}">
 {% endblock %}
 
 {% block scripts %}
 {{ super() }}
-<script src="libs/sweetalert/sweetalert.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/dropzone/dropzone.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/axios/axios.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/clipboard.js/clipboard.min.js?v={{ globals.v3 }}"></script>
-<script src="libs/lazyload/lazyload.min.js?v={{ globals.v3 }}"></script>
-<script src="js/home.js?v={{ globals.v1 }}"></script>
-<script src="js/sharex.js?v={{ globals.v1 }}"></script>
-<!-- We assign an ID for this so that the script can find out version string for render images -->
-<script id="renderScript" data-version="{{ globals.v4 }}" src="js/render.js?v={{ globals.v1 }}"></script>
+<script src="libs/sweetalert/sweetalert.min.js{{ versions[3] }}"></script>
+<script src="libs/dropzone/dropzone.min.js{{ versions[3] }}"></script>
+<script src="libs/axios/axios.min.js{{ versions[3] }}"></script>
+<script src="libs/clipboard.js/clipboard.min.js{{ versions[3] }}"></script>
+<script src="libs/lazyload/lazyload.min.js{{ versions[3] }}"></script>
+<script src="js/home.js{{ versions[1] }}"></script>
+<script src="js/misc/utils.js{{ versions[1] }}"></script>
+{# We assign an ID for this so that the script can find out version string for render images #}
+<script id="renderScript" data-version="{{ versions[4] }}" src="js/misc/render.js{{ versions[1] }}"></script>
 {% endblock %}
 
 {% block content %}
@@ -32,67 +33,93 @@
 <section id="home" class="hero is-fullheight">
   <div class="hero-body">
     <div class="container has-text-centered">
-      <p id="b">
-        <img class="logo" alt="logo" src="images/logo_smol.png?v={{ globals.v2 }}">
+      <p id="b" class="is-relative">
+        <img class="logo" alt="logo" src="images/logo_smol.png{{ versions[2] }}">
       </p>
       <h1 class="title">{{ globals.name }}</h1>
       <h2 class="subtitle">{{ globals.home_subtitle | safe }}</h2>
 
-      <h3 id="maxFileSize" class="subtitle"></h3>
+      <h3 id="maxSize" class="subtitle">
+        Maximum upload size per file is <span>{{ maxSizeInt }} MB</span>
+      </h3>
 
       <div class="columns is-gapless">
         <div class="column is-hidden-mobile"></div>
         <div class="column">
-          <a id="loginToUpload" class="button is-danger is-loading" style="display: flex"></a>
-          <div id="albumDiv" class="field has-addons" style="display: none">
+          <a id="loginToUpload" class="button is-danger is-outlined is-fullwidth is-loading"></a>
+          <div id="albumDiv" class="field has-addons is-hidden">
             <div class="control is-expanded">
               <div class="select is-fullwidth">
-                <select id="albumSelect"></select>
+                <select id="albumSelect">
+                  <option value="" selected>Upload to album</option>
+                </select>
               </div>
             </div>
             <div class="control">
-              <a id="createAlbum" class="button is-breeze" title="Create new album">
+              <a id="createAlbum" class="button is-info is-outlined" title="Create new album">
                 <i class="icon-plus"></i>
               </a>
             </div>
           </div>
-          {% if urlMaxSize -%}
-          <div id="tabs" class="tabs is-centered" style="display: none">
+          <div id="tabs" class="tabs is-centered is-boxed is-hidden">
             <ul>
-              <li data-id="tab-files" class="is-active"><a>Files</a></li>
-              <li data-id="tab-urls"><a>URLs</a></li>
+              <li data-id="tab-files" class="is-active">
+                <a>
+                  <span class="icon is-small"><i class="icon-docs"></i></span>
+                  <span>Files</span>
+                </a>
+              </li>
+              {% if urlMaxSizeInt -%}
+              <li data-id="tab-urls">
+                <a>
+                  <span class="icon is-small"><i class="icon-link"></i></span>
+                  <span>URLs</span>
+                </a>
+              </li>
+              {%- endif %}
+              <li data-id="tab-config">
+                <a>
+                  <span class="icon is-small"><i class="icon-cog-alt"></i></span>
+                  <span>Config</span>
+                </a>
+              </li>
             </ul>
           </div>
-          {%- endif %}
-          <div id="tab-files" class="tab-content" style="display: none">
+          <div id="tab-files" class="tab-content is-hidden">
             <div class="field dz-container"></div>
-            <div class="field uploads" style="display: none"></div>
+            <div class="field uploads"></div>
           </div>
-          {% if urlMaxSize -%}
-          <div id="tab-urls" class="tab-content" style="display: none">
+          {% if urlMaxSizeInt -%}
+          <div id="tab-urls" class="tab-content is-hidden">
             <div class="field">
               <div class="control">
                 <textarea id="urls" class="textarea" rows="2"></textarea>
               </div>
               <p class="help">
-                {% if urlMaxSize !== maxSize -%}
-                Maximum file size for URL upload is <span style="font-weight: bold">{{ urlMaxSize }}</span>.
-                {%- endif %}
+                {% if urlMaxSizeInt !== maxSizeInt -%}
+                Maximum file size per URL is <span id="urlMaxSize">{{ urlMaxSizeInt }} MB</span>.
+                {{- ' ' }}{% endif -%}
 
-                {% if urlExtensionsFilter.length and (urlExtensionsFilterMode === 'blacklist') -%}
-                Blacklisted extensions: {{ urlExtensionsFilter | join(', ') }}.
-                {%- elif urlExtensionsFilter.length and (urlExtensionsFilterMode === 'whitelist') -%}
-                Whitelisted extensions: {{ urlExtensionsFilter | join(', ') }}.
-                {%- endif %}
+                {% if urlExtensionsFilterEnabled -%}
+                  {% if urlExtensionsFilterMode === 'blacklist' -%}
+                  Blacklist:
+                  {%- elif urlExtensionsFilterMode === 'whitelist' -%}
+                  Whitelist:
+                  {%- endif %}{{ ' ' -}}
+                  {% set comma = joiner(', ') %}
+                  {%- for extension in urlExtensionsFilter -%}
+                  {{ comma() }}{{ extension | replace('.', '') | upper }}
+                  {%- endfor %}.
+                {{- ' ' }}{% endif -%}
 
-                {%- if urlDisclaimerMessage %}
+                {%- if urlDisclaimerMessage -%}
                 {{ urlDisclaimerMessage | safe }}
-                {% endif -%}
+                {%- endif %}
               </p>
             </div>
             <div class="field">
-              <div class="control is-expanded">
-                <a id="uploadUrls" class="button is-danger is-fullwidth is-unselectable">
+              <div class="control">
+                <a id="uploadUrls" class="button is-danger is-outlined is-fullwidth is-unselectable">
                   <span class="icon">
                     <i class="icon-upload-cloud"></i>
                   </span>
@@ -100,27 +127,29 @@
                 </a>
               </div>
             </div>
-            <div class="field uploads" style="display: none"></div>
+            <div class="field uploads"></div>
           </div>
           {%- endif %}
+          <div id="tab-config" class="tab-content is-hidden"></div>
         </div>
         <div class="column is-hidden-mobile"></div>
       </div>
 
-      <div id="tpl" style="display: none">
+      <div id="tpl" class="is-hidden">
         <div class="field">
-          <i class="icon" style="display: none"></i>
-          <img class="is-unselectable" style="display: none">
-          <p class="name is-unselectable"></p>
-          <progress class="progress is-small is-danger" value="0" max="100">0%</progress>
-          <p class="error"></p>
-          <p class="link">
+          <i class="icon is-hidden"></i>
+          <img class="is-unselectable is-hidden">
+          <p class="name"></p>
+          <p class="descriptive-progress"></p>
+          <p class="error is-hidden"></p>
+          <p class="link is-hidden">
             <a target="_blank" rel="noopener"></a>
           </p>
-          <p class="clipboard-mobile is-hidden-desktop" style="display: none">
-            <a class="button is-info is-outlined clipboard-js" style="display: flex">
+          <p class="help expiry-date is-hidden"></p>
+          <p class="clipboard-mobile is-hidden">
+            <a class="button is-small is-info is-outlined is-flex clipboard-js">
               <span class="icon">
-                <i class="icon-clipboard-1"></i>
+                <i class="icon-clipboard"></i>
               </span>
               <span>Copy link to clipboard</span>
             </a>

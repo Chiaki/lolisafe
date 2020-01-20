@@ -1,20 +1,12 @@
+{% set metaTitle = "FAQ" %}
+{% set metaUrl = '/faq' %}
+
 {% extends "_layout.njk" %}
 
-{% block stylesheets %}
-{{ super() }}
-<style>
-  .message {
-    background-color: #31363b;
-  }
-
-  .message-body {
-    color: #eff0f1;
-    border: 0;
-    -webkit-box-shadow: 0 20px 60px rgba(10, 10, 10, 0.05), 0 5px 10px rgba(10, 10, 10, 0.1), 0 1px 1px rgba(10, 10, 10, 0.2);
-    box-shadow: 0 20px 60px rgba(10, 10, 10, 0.05), 0 5px 10px rgba(10, 10, 10, 0.1), 0 1px 1px rgba(10, 10, 10, 0.2);
-  }
-</style>
-{% endblock %}
+{% set noJsMaxSizeInt = config.cloudflare.noJsMaxSize | int %}
+{% set chunkSizeInt = config.uploads.chunkSize | int %}
+{% set extensionsFilterMode = config.extensionsFilterMode %}
+{% set extensionsFilter = config.extensionsFilter %}
 
 {% block content %}
 {{ super() }}
@@ -23,14 +15,19 @@
     <h2 class='subtitle'>What is safe.fiery.me?</h2>
     <article class="message">
       <div class="message-body">
-        safe.fiery.me is a fork of <a href="https://github.com/WeebDev/lolisafe" target="_blank" rel="noopener">lolisafe</a>. You can check out the fork <a href="https://github.com/BobbyWibowo/lolisafe" target="_blank" rel="noopener">here</a>.
+        This is a fork of <a href="https://github.com/WeebDev/lolisafe" target="_blank" rel="noopener">lolisafe</a>.<br>
+        GitHub repository of the fork is located <a href="https://github.com/BobbyWibowo/lolisafe" target="_blank" rel="noopener">here</a>.
       </div>
     </article>
 
     <h2 class='subtitle'>Will you keep my files forever?</h2>
     <article class="message">
       <div class="message-body">
-        Unless I receive a copyright complain or some other bullshit, I will.
+        Unless I receive a copyright complain, or some other bullshit, I will.<br>
+        Logs of taken down files can be found <a href="https://safe.fiery.me/takedowns" target="_blank" rel="noopener">here</a>.<br>
+        <br>
+        However, we also have temporary uploads feature which will automatically delete your files after a certain period of time.<br>
+        You can configure this feature through our homepage's Config tab.
       </div>
     </article>
 
@@ -38,6 +35,7 @@
     <article class="message">
       <div class="message-body">
         Simply create a user on the site and every upload will be associated with your account, granting you access to your uploaded files through our dashboard.<br>
+        You will <strong>need</strong> to do this if you ever want to delete your own uploads in the future, unless you choose to use temporary uploads.
       </div>
     </article>
 
@@ -45,10 +43,15 @@
     <article class="message">
       <div class="message-body">
         Albums are a simple way of sorting uploads together.<br>
-        Right now you can create albums through the dashboard (and the homepage if you are logged in),<br>
-        then afterwards you can use them with our <a href="https://chrome.google.com/webstore/detail/loli-safe-uploader/enkkmplljfjppcdaancckgilmgoiofnj" target="_blank" rel="noopener">Chrome extension</a> or <a href="https://github.com/BobbyWibowo/loli-safe-extension/releases" target="_blank" rel="noopener">Firefox extension</a>,<br>
-        which will enable you to <strong>right click -> send to safe</strong> or to a desired album if you have any.<br>
-        You will have to set the domain in the extension's settings to <strong>https://safe.fiery.me</strong> though.
+        You can then share public links to these albums, to allow everyone else to view a pretty listing of the uploads in them.<br>
+        <br>
+        As long as you are logged in, you can create albums through our homepage or dashboard,<br>
+        then afterwards you can use them with our <a href="https://addons.mozilla.org/en-US/firefox/addon/lolisafe/" target="_blank" rel="noopener">Firefox extension</a> or <a href="https://chrome.google.com/webstore/detail/loli-safe-uploader/enkkmplljfjppcdaancckgilmgoiofnj" target="_blank" rel="noopener">Chrome extension</a>,<br>
+        which will enable you to <strong>right click -> send file to safe</strong>, or to a desired album if you have any.<br>
+        With the Chrome extension, you will have to manually set the domain in the extension's settings to <strong>https://safe.fiery.me</strong>.<br>
+        <br>
+        If you use a Linux desktop, we also have a bash uploader that supports uploading to albums.<br>
+        You can learn more about it <a href="https://github.com/BobbyWibowo/uguush" target="_blank" rel="noopener">here</a>.
       </div>
     </article>
 
@@ -62,7 +65,24 @@
     <h2 class='subtitle'>I saw something too illegal for my tastes here, what should I do?</h2>
     <article class="message">
       <div class="message-body">
-        Send a strongly worded email to <a href="mailto:bobby@fiery.me">bobby@fiery.me</a> and I will try to get back to you within 24 hours.
+        Send a strongly worded email to <a href="mailto:bobby@fiery.me">bobby@fiery.me</a> and I will try to get back to you within <strong>48 hours</strong>.
+      </div>
+    </article>
+
+    <h2 class='subtitle'>I found a bug! -or- I want to request a feature!</h2>
+    <article class="message">
+      <div class="message-body">
+        Feel free to create a GitHub issue <a href="https://github.com/BobbyWibowo/lolisafe/issues/new/choose" target="_blank" rel="noopener">here</a>.</br>
+        Or if you don't want to use GitHub, you can also contact me through my email above.
+      </div>
+    </article>
+
+    <h2 class='subtitle'>How do I delete my own account <strong>and</strong> all the uploads associated with it?</h2>
+    <article class="message">
+      <div class="message-body">
+        For the time being, you will need to contact me through my email above.<br>
+        A feature to delete your own account yourself is currently still being worked on.<br>
+        Otherwise, if you don't mind a record of your username being left here, it should be easy to bulk delete all your uploads from the dashboard anyway.
       </div>
     </article>
 
@@ -70,35 +90,43 @@
     <article class="message">
       <div class="message-body">
         Paris, France.<br>
-        Expect high First Time Byte (FTB) everywhere else, especially anywhere on the other side of the planet Earth (generally can be over 1000ms).<br>
-        I believe it is mostly due to the fact that we are using Cloudflare, since your requests have to go through them first.<br>
-        However, since Cloudflare will cache your uploads too, the uploads should have much better FTB afterwards (and generally faster download speed too).
+        We are using <a href="https://www.cloudflare.com/cdn/" target="_blank" rel="noopener">Cloudflare</a> though, so you can expect your uploads to be delivered quickly all over the world after they have been cached.
       </div>
     </article>
 
-    <h2 class='subtitle'>Since my uploads are being cached, what about after I delete them from the dashboard?</h2>
+    <h2 class='subtitle'>Since my uploads are cached, what about after I delete them from the dashboard?</h2>
     <article class="message">
       <div class="message-body">
-        No need to worry.<br>
         We will send API requests to Cloudflare to purge their cache immediately after you delete your uploads from the dashboard.<br>
-        Cache of thumbnails will also be purged, so no need to worry about them either.
+        Cache of their thumbnails will also be purged, if applicable.
       </div>
     </article>
 
     <h2 class='subtitle'>Do you have a No-JS uploader form?</h2>
     <article class="message">
       <div class="message-body">
-        Yes, check out <a href="nojs" target="_blank" rel="noopener">this page</a>.<br>
-        Unfortunately you will not be able to associate your uploads to your account, if you have any.
+        Yes, check out <a href="nojs" target="_blank" rel="noopener">this page</a>.
       </div>
     </article>
 
-    {% if chunkSize -%}
-    <h2 class='subtitle'>Does your API support chunked uploads?</h2>
+    {% if noJsMaxSizeInt and chunkSizeInt -%}
+    <h2 class='subtitle'>Why is the maximum file size in the No-JS uploader form smaller?</h2>
     <article class="message">
       <div class="message-body">
-        Yes, the homepage uploader will chunk your uploads into {{ chunkSize }} pieces by default.<br>
-        If you want to utilize chunked uploads with the API, then feel free to inspect the HTTP requests.
+        This site is using Cloudflare, which limits the maximum upload size.<br>
+        Since the homepage uploader chunks your uploads through JS magic, it is possible to increase the maximum file size there.
+      </div>
+    </article>
+    {%- endif %}
+
+    {% if chunkSizeInt -%}
+    <h2 class='subtitle'>So your API supports chunked uploads?</h2>
+    <article class="message">
+      <div class="message-body">
+        Yes, the homepage uploader was coded to chunk uploads into {{ chunkSizeInt }} MB pieces by default (configurable through the homepage's Config tab).<br>
+        If you want to chunk your API uploads, feel free to chunks the <a href="https://github.com/BobbyWibowo/lolisafe" target="_blank" rel="noopener">source code</a> to see how it works.<br>
+        <br>
+        A rough description of how it works is to simply upload the chunks with their UUID information attached, and then call the "finish chunks" API with the said UUID, to rebuild them into a single proper file.
       </div>
     </article>
     {%- endif %}
@@ -106,36 +134,21 @@
     <h2 class='subtitle'>What are the allowed extensions here?</h2>
     <article class="message">
       <div class="message-body">
-        {% if extensionsFilter.length and not whitelist -%}
-        We support any file extensions except the following: {{ extensionsFilter | join(', ') }}.
-        {%- elif extensionsFilter.length and whitelist -%}
-        We only support the following extensions: {{ extensionsFilter | join(', ') }}.
+        {% if extensionsFilter.length -%}
+          {%- if extensionsFilterMode === 'whitelist' -%}
+          We only support the following extensions:
+          {%- else -%}
+          We support any file extensions, except the following:
+          {%- endif -%}<br>
+          {% set comma = joiner(' ') -%}
+          {%- for extension in extensionsFilter -%}
+          {{ comma() }}<code>{{ extension }}</code>
+          {%- endfor -%}
         {%- else -%}
         We support any file extensions.
         {%- endif %}
       </div>
     </article>
-
-    <h2 class='subtitle'>How are the file URLs going to be determined?</h2>
-    <article class="message">
-      <div class="message-body">
-        Random {{ fileLength.default }}-letter strings will automatically be generated for your uploads.
-        {% if fileLength.userChangeable %}<br>
-        If you think that is too {{ "short" if tooShort else "long" }}, you can create an account, which will let you to set a preferred length.<br>
-        At the moment you can choose from {{ fileLength.min }} to {{ fileLength.max }} letters.
-        {%- endif %}
-      </div>
-    </article>
-
-    {% if noJsMaxSize and chunkSize -%}
-    <h2 class='subtitle'>Why is the maximum file size in the No-JS uploader form smaller?</h2>
-    <article class="message">
-      <div class="message-body">
-        This site is using Cloudflare, which limits the maximum upload size.<br>
-        The homepage uploader will automatically chunk your uploads into {{ chunkSize }} pieces, so it is possible to increase the maximum file size there, but not in the No-JS uploader form.
-      </div>
-    </article>
-    {%- endif %}
   </div>
 </section>
 {% endblock %}

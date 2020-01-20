@@ -1,69 +1,75 @@
-const config = require('./../config')
 const crypto = require('crypto')
-const db = require('knex')(config.database)
 const fetch = require('node-fetch')
 const fs = require('fs')
 const multer = require('multer')
 const path = require('path')
-const perms = require('./permissionController')
 const randomstring = require('randomstring')
+const paths = require('./pathsController')
+const perms = require('./permissionController')
 const utils = require('./utilsController')
+const config = require('./../config')
+const logger = require('./../logger')
+const db = require('knex')(config.database)
 
-const uploadsController = {}
+const self = {}
 
-const maxTries = config.uploads.maxTries || 1
-const uploadsDir = path.join(__dirname, '..', config.uploads.folder)
+const fileIdentifierLengthFallback = 32
+const fileIdentifierLengthChangeable = !config.uploads.fileIdentifierLength.force &&
+  typeof config.uploads.fileIdentifierLength.min === 'number' &&
+  typeof config.uploads.fileIdentifierLength.max === 'number'
+
+const maxSize = parseInt(config.uploads.maxSize)
+const maxSizeBytes = maxSize * 1e6
+const urlMaxSizeBytes = parseInt(config.uploads.urlMaxSize) * 1e6
+
+const maxFilesPerUpload = 20
+
 const chunkedUploads = Boolean(config.uploads.chunkSize)
-const chunksDir = path.join(uploadsDir, 'chunks')
-const maxSize = config.uploads.maxSize
-const maxSizeBytes = parseInt(maxSize) * 1000 * 1000
-const urlMaxSizeBytes = parseInt(config.uploads.urlMaxSize) * 1000 * 1000
+const chunksData = {}
+//  Hard-coded min chunk size of 1 MB (e.g. 50 MB = max 50 chunks)
+const maxChunksCount = maxSize
 
-const storage = multer.diskStorage({
-  destination (req, file, cb) {
-    // If chunked uploads is disabled or the uploaded file is not a chunk
-    if (!chunkedUploads || (req.body.uuid === undefined && req.body.chunkindex === undefined))
-      return cb(null, uploadsDir)
+const extensionsFilter = Array.isArray(config.extensionsFilter) &&
+  config.extensionsFilter.length
+const urlExtensionsFilter = Array.isArray(config.uploads.urlExtensionsFilter) &&
+  config.uploads.urlExtensionsFilter.length
+const temporaryUploads = Array.isArray(config.uploads.temporaryUploadAges) &&
+  config.uploads.temporaryUploadAges.length
 
-    const uuidDir = path.join(chunksDir, req.body.uuid)
-    fs.access(uuidDir, error => {
-      if (!error) return cb(null, uuidDir)
-      fs.mkdir(uuidDir, error => {
-        if (!error) return cb(null, uuidDir)
-        console.error(error)
-        // eslint-disable-next-line standard/no-callback-literal
-        return cb('Could not process the chunked upload. Try again?')
-      })
-    })
-  },
-  filename (req, file, cb) {
-    // If chunked uploads is disabled or the uploaded file is not a chunk
-    if (!chunkedUploads || (req.body.uuid === undefined && req.body.chunkindex === undefined)) {
-      const extension = utils.extname(file.originalname)
-      const length = uploadsController.getFileNameLength(req)
-      return uploadsController.getUniqueRandomName(length, extension, req.app.get('uploads-set'))
-        .then(name => cb(null, name))
-        .catch(error => cb(error))
+const initChunks = async uuid => {
+  if (chunksData[uuid] === undefined) {
+    const root = path.join(paths.chunks, uuid)
+    try {
+      await paths.access(root)
+    } catch (err) {
+      // Re-throw error
+      if (err && err.code !== 'ENOENT')
+        throw err
+      await paths.mkdir(root)
     }
-
-    // index.extension (e.i. 0, 1, ..., n - will prepend zeros depending on the amount of chunks)
-    const digits = req.body.totalchunkcount !== undefined ? `${req.body.totalchunkcount - 1}`.length : 1
-    const zeros = new Array(digits + 1).join('0')
-    const name = (zeros + req.body.chunkindex).slice(-digits)
-    return cb(null, name)
+    chunksData[uuid] = { root, chunks: [], size: 0 }
   }
-})
+  return chunksData[uuid].root
+}
 
-const upload = multer({
-  storage,
+const executeMulter = multer({
+  // Guide: https://github.com/expressjs/multer#limits
   limits: {
-    fileSize: maxSizeBytes
+    fileSize: maxSizeBytes,
+    // Maximum number of non-file fields.
+    // Dropzone.js will add 6 extra fields for chunked uploads.
+    // We don't use them for anything else.
+    fields: 6,
+    // Maximum number of file fields.
+    // Chunked uploads still need to provide only 1 file field.
+    // Otherwise, only one of the files will end up being properly stored,
+    // and that will also be as a chunk.
+    files: maxFilesPerUpload
   },
   fileFilter (req, file, cb) {
-    const extname = utils.extname(file.originalname)
-    if (uploadsController.isExtensionFiltered(extname))
-      // eslint-disable-next-line standard/no-callback-literal
-      return cb(`${extname ? `${extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted.`)
+    file.extname = utils.extname(file.originalname)
+    if (self.isExtensionFiltered(file.extname))
+      return cb(`${file.extname ? `${file.extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted.`)
 
     // Re-map Dropzone keys so people can manually use the API without prepending 'dz'
     for (const key in req.body) {
@@ -72,247 +78,315 @@ const upload = multer({
       delete req.body[key]
     }
 
-    if (req.body.chunkindex) {
-      if (!chunkedUploads)
-        // eslint-disable-next-line standard/no-callback-literal
-        return cb('Chunked uploads are disabled at the moment.')
+    if (req.body.chunkindex !== undefined && !chunkedUploads)
+      return cb('Chunked uploads are disabled at the moment.')
+    else
+      return cb(null, true)
+  },
+  storage: multer.diskStorage({
+    destination (req, file, cb) {
+      // If chunked uploads is disabled or the uploaded file is not a chunk
+      if (!chunkedUploads || (req.body.uuid === undefined && req.body.chunkindex === undefined))
+        return cb(null, paths.uploads)
 
-      const totalfilesize = parseInt(req.body.totalfilesize)
-      if (!isNaN(totalfilesize)) {
-        if (config.filterEmptyFile && totalfilesize === 0)
-          // eslint-disable-next-line standard/no-callback-literal
-          return cb('Empty files are not allowed.')
-        if (totalfilesize > maxSizeBytes)
-          // eslint-disable-next-line standard/no-callback-literal
-          return cb('Chunk error occurred. Total file size is larger than the maximum file size.')
+      initChunks(req.body.uuid)
+        .then(uuidDir => cb(null, uuidDir))
+        .catch(error => {
+          logger.error(error)
+          return cb('Could not process the chunked upload. Try again?')
+        })
+    },
+
+    filename (req, file, cb) {
+      // If chunked uploads is disabled or the uploaded file is not a chunk
+      if (!chunkedUploads || (req.body.uuid === undefined && req.body.chunkindex === undefined)) {
+        const length = self.parseFileIdentifierLength(req.headers.filelength)
+        return self.getUniqueRandomName(length, file.extname)
+          .then(name => cb(null, name))
+          .catch(error => cb(error))
       }
-    }
 
-    return cb(null, true)
-  }
+      // index.extension (i.e. 0, 1, ..., n - will prepend zeros depending on the amount of chunks)
+      const digits = req.body.totalchunkcount !== undefined ? `${req.body.totalchunkcount - 1}`.length : 1
+      const zeros = new Array(digits + 1).join('0')
+      const name = (zeros + req.body.chunkindex).slice(-digits)
+      return cb(null, name)
+    }
+  })
 }).array('files[]')
 
-uploadsController.isExtensionFiltered = extname => {
+self.isExtensionFiltered = extname => {
   // If empty extension needs to be filtered
-  if (!extname && config.filterNoExtension) return true
+  if (!extname && config.filterNoExtension)
+    return true
+
   // If there are extensions that have to be filtered
-  if (extname && Array.isArray(config.extensionsFilter) && config.extensionsFilter.length) {
+  if (extname && extensionsFilter) {
     const match = config.extensionsFilter.some(extension => extname === extension.toLowerCase())
     const whitelist = config.extensionsFilterMode === 'whitelist'
-    if ((!whitelist && match) || (whitelist && !match)) return true
+    if ((!whitelist && match) || (whitelist && !match))
+      return true
   }
+
   return false
 }
 
-uploadsController.getFileNameLength = req => {
-  // If the user has a preferred file length, make sure it is within the allowed range
-  if (req.headers.filelength)
-    return Math.min(Math.max(req.headers.filelength, config.uploads.fileLength.min), config.uploads.fileLength.max)
+self.parseFileIdentifierLength = fileLength => {
+  if (!config.uploads.fileIdentifierLength)
+    return fileIdentifierLengthFallback
 
-  // Let's default it to 32 characters when config key is falsy
-  return config.uploads.fileLength.default || 32
+  const parsed = parseInt(fileLength)
+  if (isNaN(parsed) ||
+    !fileIdentifierLengthChangeable ||
+    parsed < config.uploads.fileIdentifierLength.min ||
+    parsed > config.uploads.fileIdentifierLength.max)
+    return config.uploads.fileIdentifierLength.default || fileIdentifierLengthFallback
+  else
+    return parsed
 }
 
-uploadsController.getUniqueRandomName = (length, extension, set) => {
-  return new Promise((resolve, reject) => {
-    const access = i => {
-      const identifier = randomstring.generate(length)
-      if (config.uploads.cacheFileIdentifiers) {
-        // Check whether the identifier is already used in cache
-        if (set.has(identifier)) {
-          console.log(`Identifier ${identifier} is already in use (${++i}/${maxTries}).`)
-          if (i < maxTries) return access(i)
-          // eslint-disable-next-line prefer-promise-reject-errors
-          return reject('Sorry, we could not allocate a unique random name. Try again?')
-        }
-        set.add(identifier)
-        // console.log(`Added ${identifier} to identifiers cache`)
-        return resolve(identifier + extension)
-      } else {
-        // Less stricter collision check, as in the same identifier
-        // can be used by multiple different extensions
-        const name = identifier + extension
-        fs.access(path.join(uploadsDir, name), error => {
-          if (error) return resolve(name)
-          console.log(`A file named ${name} already exists (${++i}/${maxTries}).`)
-          if (i < maxTries) return access(i)
-          // eslint-disable-next-line prefer-promise-reject-errors
-          return reject('Sorry, we could not allocate a unique random name. Try again?')
-        })
+self.getUniqueRandomName = async (length, extension) => {
+  for (let i = 0; i < utils.idMaxTries; i++) {
+    const identifier = randomstring.generate(length)
+    const name = identifier + extension
+    if (config.uploads.cacheFileIdentifiers) {
+      if (utils.idSet.has(identifier)) {
+        logger.log(`Identifier ${identifier} is already in use (${i + 1}/${utils.idMaxTries}).`)
+        continue
+      }
+      utils.idSet.add(identifier)
+      // logger.log(`Added ${identifier} to identifiers cache`)
+    } else {
+      try {
+        await paths.access(path.join(paths.uploads, name))
+        logger.log(`${name} is already in use (${i + 1}/${utils.idMaxTries}).`)
+        continue
+      } catch (error) {
+        // Re-throw error
+        if (error & error.code !== 'ENOENT')
+          throw error
       }
     }
-    access(0)
-  })
+    return name
+  }
+
+  throw 'Sorry, we could not allocate a unique random name. Try again?'
 }
 
-uploadsController.upload = async (req, res, next) => {
+self.parseUploadAge = age => {
+  if (age === undefined || age === null)
+    return config.uploads.temporaryUploadAges[0]
+  const parsed = parseFloat(age)
+  if (config.uploads.temporaryUploadAges.includes(parsed))
+    return parsed
+  else
+    return null
+}
+
+self.parseStripTags = stripTags => {
+  if (!config.uploads.stripTags)
+    return false
+
+  if (config.uploads.stripTags.force || stripTags === undefined)
+    return config.uploads.stripTags.default
+
+  return Boolean(parseInt(stripTags))
+}
+
+self.upload = async (req, res, next) => {
   let user
   if (config.private === true) {
     user = await utils.authorize(req, res)
     if (!user) return
   } else if (req.headers.token) {
-    user = await db.table('users').where('token', req.headers.token).first()
+    user = await db.table('users')
+      .where('token', req.headers.token)
+      .first()
+    if (user && (user.enabled === false || user.enabled === 0))
+      return res.json({ success: false, description: 'This account has been disabled.' })
   }
-
-  if (user && (user.enabled === false || user.enabled === 0))
-    return res.json({ success: false, description: 'This account has been disabled.' })
-
-  if (user && user.fileLength && !req.headers.filelength)
-    req.headers.filelength = user.fileLength
 
   let albumid = parseInt(req.headers.albumid || req.params.albumid)
-  if (isNaN(albumid)) albumid = null
+  if (isNaN(albumid))
+    albumid = null
 
-  if (req.body.urls)
-    return uploadsController.actuallyUploadByUrl(req, res, user, albumid)
-  else
-    return uploadsController.actuallyUpload(req, res, user, albumid)
-}
+  let age = null
+  if (temporaryUploads) {
+    age = self.parseUploadAge(req.headers.age)
+    if (!age && !config.uploads.temporaryUploadAges.includes(0))
+      return res.json({ success: false, description: 'Permanent uploads are not permitted.' })
+  }
 
-uploadsController.actuallyUpload = async (req, res, user, albumid) => {
-  const erred = error => {
+  try {
+    const func = req.body.urls ? self.actuallyUploadUrls : self.actuallyUploadFiles
+    await func(req, res, user, albumid, age)
+  } catch (error) {
     const isError = error instanceof Error
-    if (isError) console.error(error)
-    res.status(400).json({
+    if (isError) logger.error(error)
+    return res.status(400).json({
       success: false,
       description: isError ? error.toString() : error
     })
   }
+}
 
-  upload(req, res, async error => {
-    if (error) {
-      const expected = [
-        'LIMIT_FILE_SIZE',
-        'LIMIT_UNEXPECTED_FILE'
-      ]
-      if (expected.includes(error.code)) return erred(error.toString())
-      return erred(error)
-    }
-
-    if (!req.files || !req.files.length) return erred('No files.')
-
-    // If chunked uploads is enabled and the uploaded file is a chunk, then just say that it was a success
-    if (chunkedUploads && req.body.uuid) return res.json({ success: true })
-
-    const infoMap = req.files.map(file => {
-      file.albumid = albumid
-      return {
-        path: path.join(__dirname, '..', config.uploads.folder, file.filename),
-        data: file
-      }
-    })
-
-    if (config.filterEmptyFile && infoMap.some(file => file.data.size === 0)) {
-      infoMap.forEach(file => {
-        utils.deleteFile(file.data.filename, req.app.get('uploads-set')).catch(console.error)
-      })
-      return erred('Empty files are not allowed.')
-    }
-
-    if (config.uploads.scan && config.uploads.scan.enabled) {
-      const scan = await uploadsController.scanFiles(req, infoMap)
-      if (scan) return erred(scan)
-    }
-
-    const result = await uploadsController.formatInfoMap(req, res, user, infoMap)
-      .catch(erred)
-    if (!result) return
-
-    uploadsController.processFilesForDisplay(req, res, result.files, result.existingFiles)
+self.actuallyUploadFiles = async (req, res, user, albumid, age) => {
+  const error = await new Promise(resolve => {
+    return executeMulter(req, res, err => resolve(err))
   })
-}
 
-uploadsController.actuallyUploadByUrl = async (req, res, user, albumid) => {
-  const erred = error => {
-    const isError = error instanceof Error
-    if (isError) console.error(error)
-    res.status(400).json({
-      success: false,
-      description: isError ? error.toString() : error
-    })
+  if (error) {
+    const suppress = [
+      'LIMIT_FILE_SIZE',
+      'LIMIT_UNEXPECTED_FILE'
+    ]
+    if (suppress.includes(error.code))
+      throw error.toString()
+    else
+      throw error
   }
 
-  if (!config.uploads.urlMaxSize) return erred('Upload by URLs is disabled at the moment.')
+  if (!req.files || !req.files.length)
+    throw 'No files.'
+
+  // If chunked uploads is enabled and the uploaded file is a chunk, then just say that it was a success
+  const uuid = req.body.uuid
+  if (chunkedUploads && chunksData[uuid] !== undefined) {
+    req.files.forEach(file => {
+      chunksData[uuid].chunks.push(file.filename)
+      chunksData[uuid].size += file.size
+    })
+    return res.json({ success: true })
+  }
+
+  const infoMap = req.files.map(file => {
+    file.albumid = albumid
+    file.age = age
+    return {
+      path: path.join(paths.uploads, file.filename),
+      data: file
+    }
+  })
+
+  if (config.filterEmptyFile && infoMap.some(file => file.data.size === 0)) {
+    // Unlink all files when at least one file is an empty file
+    // Should continue even when encountering errors
+    await Promise.all(infoMap.map(info =>
+      utils.unlinkFile(info.data.filename).catch(logger.error)
+    ))
+
+    throw 'Empty files are not allowed.'
+  }
+
+  if (utils.clamd.scanner) {
+    const scanResult = await self.scanFiles(req, user, infoMap)
+    if (scanResult) throw scanResult
+  }
+
+  await self.stripTags(req, infoMap)
+
+  const result = await self.storeFilesToDb(req, res, user, infoMap)
+  await self.sendUploadResponse(req, res, result)
+}
+
+self.actuallyUploadUrls = async (req, res, user, albumid, age) => {
+  if (!config.uploads.urlMaxSize)
+    throw 'Upload by URLs is disabled at the moment.'
 
   const urls = req.body.urls
-  if (!urls || !(urls instanceof Array)) return erred('Missing "urls" property (Array).')
+  if (!urls || !(urls instanceof Array))
+    throw 'Missing "urls" property (array).'
 
-  let iteration = 0
+  if (urls.length > maxFilesPerUpload)
+    throw `Maximum ${maxFilesPerUpload} URLs at a time.`
+
+  const downloaded = []
   const infoMap = []
-  for (let url of urls) {
-    const original = path.basename(url).split(/[?#]/)[0]
-    const extname = utils.extname(original)
+  try {
+    await Promise.all(urls.map(async url => {
+      const original = path.basename(url).split(/[?#]/)[0]
+      const extname = utils.extname(original)
 
-    // Extensions filter
-    let filtered = false
-    if (['blacklist', 'whitelist'].includes(config.uploads.urlExtensionsFilterMode))
-      if (Array.isArray(config.uploads.urlExtensionsFilter) && config.uploads.urlExtensionsFilter.length) {
-        const match = config.uploads.urlExtensionsFilter.some(extension => extname === extension.toLowerCase())
-        const whitelist = config.uploads.urlExtensionsFilterMode === 'whitelist'
-        filtered = ((!whitelist && match) || (whitelist && !match))
-      } else {
-        return erred('config.uploads.urlExtensionsFilter is not an array or is an empty array, please contact site owner.')
-      }
-    else filtered = uploadsController.isExtensionFiltered(extname)
+      // Extensions filter
+      let filtered = false
+      if (['blacklist', 'whitelist'].includes(config.uploads.urlExtensionsFilterMode))
+        if (urlExtensionsFilter) {
+          const match = config.uploads.urlExtensionsFilter.some(extension => extname === extension.toLowerCase())
+          const whitelist = config.uploads.urlExtensionsFilterMode === 'whitelist'
+          filtered = ((!whitelist && match) || (whitelist && !match))
+        } else {
+          throw 'Invalid extensions filter, please contact the site owner.'
+        }
+      else
+        filtered = self.isExtensionFiltered(extname)
 
-    if (filtered)
-      return erred(`${extname ? `${extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted due to security reasons.`)
+      if (filtered)
+        throw `${extname ? `${extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted.`
 
-    if (config.uploads.urlProxy)
-      url = config.uploads.urlProxy
-        .replace(/{url}/g, encodeURIComponent(url))
-        .replace(/{url-noprot}/g, encodeURIComponent(url.replace(/^https?:\/\//, '')))
+      if (config.uploads.urlProxy)
+        url = config.uploads.urlProxy
+          .replace(/{url}/g, encodeURIComponent(url))
+          .replace(/{url-noprot}/g, encodeURIComponent(url.replace(/^https?:\/\//, '')))
 
-    try {
       // Limit max response body size with maximum allowed size
       const fetchFile = await fetch(url, { size: urlMaxSizeBytes })
       if (fetchFile.status !== 200)
-        return erred(`${fetchFile.status} ${fetchFile.statusText}`)
+        throw `${fetchFile.status} ${fetchFile.statusText}`
 
       const headers = fetchFile.headers
       const file = await fetchFile.buffer()
 
-      const length = uploadsController.getFileNameLength(req)
-      const name = await uploadsController.getUniqueRandomName(length, extname, req.app.get('uploads-set'))
+      const length = self.parseFileIdentifierLength(req.headers.filelength)
+      const name = await self.getUniqueRandomName(length, extname)
 
-      const destination = path.join(uploadsDir, name)
-      fs.writeFile(destination, file, async error => {
-        if (error) return erred(error)
+      const destination = path.join(paths.uploads, name)
+      await paths.writeFile(destination, file)
+      downloaded.push(destination)
 
-        const data = {
+      infoMap.push({
+        path: destination,
+        data: {
           filename: name,
           originalname: original,
+          extname,
           mimetype: headers.get('content-type').split(';')[0] || '',
           size: file.byteLength,
-          albumid
-        }
-
-        infoMap.push({
-          path: destination,
-          data
-        })
-
-        iteration++
-        if (iteration === urls.length) {
-          if (config.uploads.scan && config.uploads.scan.enabled) {
-            const scan = await uploadsController.scanFiles(req, infoMap)
-            if (scan) return erred(scan)
-          }
-
-          const result = await uploadsController.formatInfoMap(req, res, user, infoMap)
-            .catch(erred)
-          if (!result) return
-
-          uploadsController.processFilesForDisplay(req, res, result.files, result.existingFiles)
+          albumid,
+          age
         }
       })
-    } catch (error) {
-      erred(error)
+    }))
+
+    // If no errors encountered, clear cache of downloaded files
+    downloaded.length = 0
+
+    if (utils.clamd.scanner) {
+      const scanResult = await self.scanFiles(req, user, infoMap)
+      if (scanResult) throw scanResult
     }
+
+    const result = await self.storeFilesToDb(req, res, user, infoMap)
+    await self.sendUploadResponse(req, res, result)
+  } catch (error) {
+    // Unlink all downloaded files when at least one file threw an error from the for-loop
+    // Should continue even when encountering errors
+    if (downloaded.length)
+      await Promise.all(downloaded.map(file =>
+        utils.unlinkFile(file).catch(logger.error)
+      ))
+
+    const errorString = error.toString()
+    const suppress = [
+      / over limit:/
+    ]
+    if (!suppress.some(t => t.test(errorString)))
+      throw error
+    else
+      throw errorString
   }
 }
 
-uploadsController.finishChunks = async (req, res, next) => {
+self.finishChunks = async (req, res, next) => {
   if (!chunkedUploads)
     return res.json({ success: false, description: 'Chunked upload is disabled at the moment.' })
 
@@ -321,450 +395,521 @@ uploadsController.finishChunks = async (req, res, next) => {
     user = await utils.authorize(req, res)
     if (!user) return
   } else if (req.headers.token) {
-    user = await db.table('users').where('token', req.headers.token).first()
+    user = await db.table('users')
+      .where('token', req.headers.token)
+      .first()
+    if (user && (user.enabled === false || user.enabled === 0))
+      return res.json({ success: false, description: 'This account has been disabled.' })
   }
 
-  if (user && (user.enabled === false || user.enabled === 0))
-    return res.json({ success: false, description: 'This account has been disabled.' })
-
-  if (user && user.fileLength && !req.headers.filelength)
-    req.headers.filelength = user.fileLength
-
-  let albumid = parseInt(req.headers.albumid || req.params.albumid)
-  if (isNaN(albumid)) albumid = null
-
-  return uploadsController.actuallyFinishChunks(req, res, user, albumid)
-}
-
-uploadsController.actuallyFinishChunks = async (req, res, user, albumid) => {
-  const erred = error => {
+  try {
+    await self.actuallyFinishChunks(req, res, user)
+  } catch (error) {
     const isError = error instanceof Error
-    if (isError) console.error(error)
-    res.status(400).json({
+    if (isError) logger.error(error)
+    return res.status(400).json({
       success: false,
       description: isError ? error.toString() : error
     })
   }
+}
+
+self.actuallyFinishChunks = async (req, res, user) => {
+  const check = file => typeof file.uuid !== 'string' ||
+    !chunksData[file.uuid] ||
+    chunksData[file.uuid].chunks.length < 2
 
   const files = req.body.files
-  if (!files || !(files instanceof Array) || !files.length) return erred('Invalid "files" property (Array).')
+  if (!Array.isArray(files) || !files.length || files.some(check))
+    throw 'An unexpected error occurred.'
 
-  let iteration = 0
   const infoMap = []
-  for (const file of files) {
-    if (!file.uuid || typeof file.uuid !== 'string') return erred('Invalid "uuid" property (string).')
-    if (typeof file.count !== 'number' || file.count < 1) return erred('Invalid "count" property (number).')
+  try {
+    await Promise.all(files.map(async file => {
+      if (chunksData[file.uuid].chunks.length > maxChunksCount)
+        throw 'Too many chunks.'
 
-    const uuidDir = path.join(chunksDir, file.uuid)
-    fs.readdir(uuidDir, async (error, chunkNames) => {
-      if (error) {
-        if (error.code === 'ENOENT') return erred('UUID is not being used.')
-        return erred(error)
-      }
-      if (file.count < chunkNames.length) return erred('Chunks count mismatch.')
+      file.extname = typeof file.original === 'string' ? utils.extname(file.original) : ''
+      if (self.isExtensionFiltered(file.extname))
+        throw `${file.extname ? `${file.extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted.`
 
-      const extname = typeof file.original === 'string' ? utils.extname(file.original) : ''
-      if (uploadsController.isExtensionFiltered(extname))
-        return erred(`${extname ? `${extname.substr(1).toUpperCase()} files` : 'Files with no extension'} are not permitted due to security reasons.`)
-
-      const length = uploadsController.getFileNameLength(req)
-      const name = await uploadsController.getUniqueRandomName(length, extname, req.app.get('uploads-set'))
-        .catch(erred)
-      if (!name) return
-
-      const destination = path.join(uploadsDir, name)
-
-      // Sort chunk names
-      chunkNames.sort()
-
-      // Get total chunks size
-      const chunksTotalSize = await uploadsController.getTotalSize(uuidDir, chunkNames)
-        .catch(erred)
-      if (typeof chunksTotalSize !== 'number') return
-
-      const isEmpty = config.filterEmptyFile && (chunksTotalSize === 0)
-      const isBigger = chunksTotalSize > maxSizeBytes
-      if (isEmpty || isBigger) {
-        // Delete all chunks and remove chunks dir
-        const chunksCleaned = await uploadsController.cleanUpChunks(uuidDir, chunkNames)
-          .catch(erred)
-        if (!chunksCleaned) return
-
-        if (isEmpty)
-          return erred('Empty files are not allowed.')
-        else
-          return erred(`Total chunks size is bigger than ${maxSize}.`)
+      if (temporaryUploads) {
+        file.age = self.parseUploadAge(file.age)
+        if (!file.age && !config.uploads.temporaryUploadAges.includes(0))
+          throw 'Permanent uploads are not permitted.'
       }
 
-      // Append all chunks
-      const destFileStream = fs.createWriteStream(destination, { flags: 'a' })
-      const chunksAppended = await uploadsController.appendToStream(destFileStream, uuidDir, chunkNames)
-        .catch(erred)
-      if (!chunksAppended) return
+      file.size = chunksData[file.uuid].size
+      if (config.filterEmptyFile && file.size === 0)
+        throw 'Empty files are not allowed.'
+      else if (file.size > maxSizeBytes)
+        throw `File too large. Chunks are bigger than ${maxSize} MB.`
 
-      // Delete all chunks and remove chunks dir
-      const chunksCleaned = await uploadsController.cleanUpChunks(uuidDir, chunkNames)
-        .catch(erred)
-      if (!chunksCleaned) return
+      // Generate name
+      const length = self.parseFileIdentifierLength(file.filelength)
+      const name = await self.getUniqueRandomName(length, file.extname)
+
+      // Combine chunks
+      const destination = path.join(paths.uploads, name)
+      await self.combineChunks(destination, file.uuid)
+
+      // Continue even when encountering errors
+      await self.cleanUpChunks(file.uuid).catch(logger.error)
+
+      // Double-check file size
+      const lstat = await paths.lstat(destination)
+      if (lstat.size !== file.size)
+        throw 'Chunks size mismatched.'
+
+      let albumid = parseInt(file.albumid)
+      if (isNaN(albumid))
+        albumid = null
 
       const data = {
         filename: name,
         originalname: file.original || '',
+        extname: file.extname,
         mimetype: file.type || '',
-        size: file.size || 0
+        size: file.size,
+        albumid,
+        age: file.age
       }
 
-      data.albumid = parseInt(file.albumid)
-      if (isNaN(data.albumid)) data.albumid = albumid
+      infoMap.push({ path: destination, data })
+    }))
 
-      infoMap.push({
-        path: destination,
-        data
-      })
+    if (utils.clamd.scanner) {
+      const scanResult = await self.scanFiles(req, user, infoMap)
+      if (scanResult) throw scanResult
+    }
 
-      iteration++
-      if (iteration === files.length) {
-        if (config.uploads.scan && config.uploads.scan.enabled) {
-          const scan = await uploadsController.scanFiles(req, infoMap)
-          if (scan) return erred(scan)
-        }
+    await self.stripTags(req, infoMap)
 
-        const result = await uploadsController.formatInfoMap(req, res, user, infoMap)
-          .catch(erred)
-        if (!result) return
+    const result = await self.storeFilesToDb(req, res, user, infoMap)
+    await self.sendUploadResponse(req, res, result)
+  } catch (error) {
+    // Clean up leftover chunks
+    // Should continue even when encountering errors
+    await Promise.all(files.map(file => {
+      if (chunksData[file.uuid] !== undefined)
+        return self.cleanUpChunks(file.uuid).catch(logger.error)
+    }))
 
-        uploadsController.processFilesForDisplay(req, res, result.files, result.existingFiles)
-      }
-    })
+    // Re-throw error
+    throw error
   }
 }
 
-uploadsController.getTotalSize = (uuidDir, chunkNames) => {
-  return new Promise((resolve, reject) => {
-    let size = 0
-    const stat = i => {
-      if (i === chunkNames.length) return resolve(size)
-      fs.stat(path.join(uuidDir, chunkNames[i]), (error, stats) => {
-        if (error) return reject(error)
-        size += stats.size
-        stat(i + 1)
+self.combineChunks = async (destination, uuid) => {
+  let errorObj
+  const writeStream = fs.createWriteStream(destination, { flags: 'a' })
+
+  try {
+    chunksData[uuid].chunks.sort()
+    for (const chunk of chunksData[uuid].chunks)
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(path.join(chunksData[uuid].root, chunk))
+          .on('error', error => reject(error))
+          .on('end', () => resolve())
+          .pipe(writeStream, { end: false })
       })
+  } catch (error) {
+    errorObj = error
+  }
+
+  // Close stream
+  writeStream.end()
+
+  // Re-throw error
+  if (errorObj) throw errorObj
+}
+
+self.cleanUpChunks = async (uuid) => {
+  // Unlink chunks
+  await Promise.all(chunksData[uuid].chunks.map(chunk =>
+    paths.unlink(path.join(chunksData[uuid].root, chunk))
+  ))
+  // Remove UUID dir
+  await paths.rmdir(chunksData[uuid].root)
+  // Delete cached date
+  delete chunksData[uuid]
+}
+
+self.scanFiles = async (req, user, infoMap) => {
+  if (user && utils.clamd.groupBypass && perms.is(user, utils.clamd.groupBypass))
+    return false
+
+  const foundThreats = []
+  const results = await Promise.all(infoMap.map(async info => {
+    const reply = await utils.clamd.scanner.scanFile(info.path, utils.clamd.timeout, utils.clamd.chunkSize)
+    if (!reply.includes('OK') || reply.includes('FOUND')) {
+      // eslint-disable-next-line no-control-regex
+      const foundThreat = reply.replace(/^stream: /, '').replace(/ FOUND\u0000$/, '')
+      logger.log(`[ClamAV]: ${info.data.filename}: ${foundThreat} FOUND.`)
+      foundThreats.push(foundThreat)
     }
-    stat(0)
-  })
-}
-
-uploadsController.appendToStream = (destFileStream, uuidDr, chunkNames) => {
-  return new Promise((resolve, reject) => {
-    const append = i => {
-      if (i === chunkNames.length) {
-        destFileStream.end()
-        return resolve(true)
-      }
-      fs.createReadStream(path.join(uuidDr, chunkNames[i]))
-        .on('end', () => {
-          append(i + 1)
-        })
-        .on('error', error => {
-          console.error(error)
-          destFileStream.end()
-          return reject(error)
-        })
-        .pipe(destFileStream, { end: false })
-    }
-    append(0)
-  })
-}
-
-uploadsController.cleanUpChunks = (uuidDir, chunkNames) => {
-  return new Promise(async (resolve, reject) => {
-    await Promise.all(chunkNames.map(chunkName => {
-      return new Promise((resolve, reject) => {
-        const chunkPath = path.join(uuidDir, chunkName)
-        fs.unlink(chunkPath, error => {
-          if (error && error.code !== 'ENOENT') {
-            console.error(error)
-            return reject(error)
-          }
-          resolve()
-        })
-      })
-    })).catch(reject)
-    fs.rmdir(uuidDir, error => {
-      if (error) return reject(error)
-      resolve(true)
-    })
-  })
-}
-
-uploadsController.formatInfoMap = (req, res, user, infoMap) => {
-  return new Promise(async resolve => {
-    let iteration = 0
-    const files = []
-    const existingFiles = []
-    const albumsAuthorized = {}
-
-    for (const info of infoMap) {
-      // Check if the file exists by checking hash and size
-      const hash = crypto.createHash('md5')
-      const stream = fs.createReadStream(info.path)
-
-      stream.on('data', data => {
-        hash.update(data, 'utf8')
-      })
-
-      stream.on('end', async () => {
-        const fileHash = hash.digest('hex')
-        const dbFile = await db.table('files')
-          .where(function () {
-            if (user === undefined)
-              this.whereNull('userid')
-            else
-              this.where('userid', user.id)
-          })
-          .where({
-            hash: fileHash,
-            size: info.data.size
-          })
-          .first()
-
-        if (!dbFile) {
-          if (info.data.albumid && albumsAuthorized[info.data.albumid] === undefined) {
-            const authorized = await db.table('albums')
-              .where({
-                id: info.data.albumid,
-                userid: user.id
-              })
-              .first()
-            albumsAuthorized[info.data.albumid] = Boolean(authorized)
-          }
-
-          files.push({
-            name: info.data.filename,
-            original: info.data.originalname,
-            type: info.data.mimetype,
-            size: info.data.size,
-            hash: fileHash,
-            ip: req.ip,
-            albumid: albumsAuthorized[info.data.albumid] ? info.data.albumid : null,
-            userid: user !== undefined ? user.id : null,
-            timestamp: Math.floor(Date.now() / 1000)
-          })
-          utils.invalidateStatsCache('uploads')
-        } else {
-          utils.deleteFile(info.data.filename, req.app.get('uploads-set')).catch(console.error)
-          existingFiles.push(dbFile)
-        }
-
-        iteration++
-        if (iteration === infoMap.length)
-          resolve({ files, existingFiles })
-      })
-    }
-  })
-}
-
-uploadsController.scanFiles = (req, infoMap) => {
-  return new Promise(async (resolve, reject) => {
-    const scanner = req.app.get('clam-scanner')
-    const timeout = config.uploads.scan.timeout || 5000
-    const chunkSize = config.uploads.scan.chunkSize || 64 * 1024
-    let iteration = 0
-    for (const info of infoMap)
-      scanner.scanFile(info.path, timeout, chunkSize).then(reply => {
-        iteration++
-        const lastIteration = iteration === infoMap.length
-        if (!reply.includes('OK') || reply.includes('FOUND')) {
-          // eslint-disable-next-line no-control-regex
-          const virus = reply.replace(/^stream: /, '').replace(/ FOUND\u0000$/, '')
-          console.log(`ClamAV: ${info.data.filename}: ${virus} FOUND.`)
-          return resolve({ virus, lastIteration })
-        }
-        if (lastIteration) resolve(null)
-      }).catch(reject)
-  }).then(result => {
-    if (!result) return false
-    // If there is at least one dirty file, then delete all files
-    const set = req.app.get('uploads-set')
-    infoMap.forEach(info => {
-      utils.deleteFile(info.data.filename).catch(console.error)
-      if (set) {
-        const identifier = info.data.filename.split('.')[0]
-        set.delete(identifier)
-        // console.log(`Removed ${identifier} from identifiers cache (formatInfoMap)`)
-      }
-    })
-    // Unfortunately, we will only be returning name of the first virus
-    // even if the current session was made up by multiple virus types
-    return `Threat found: ${result.virus}${result.lastIteration ? '' : ', and maybe more'}.`
+  })).then(() => {
+    if (foundThreats.length)
+      return `Threat found: ${foundThreats[0]}${foundThreats.length > 1 ? ', and more' : ''}.`
   }).catch(error => {
-    console.error(`ClamAV: ${error.toString()}.`)
-    return `ClamAV: ${error.code !== undefined ? `${error.code} , p` : 'P'}lease contact the site owner.`
+    logger.error(`[ClamAV]: ${error.toString()}`)
+    return 'An unexpected error occurred with ClamAV, please contact the site owner.'
   })
+
+  if (results)
+    // Unlink all files when at least one threat is found OR any errors occurred
+    // Should continue even when encountering errors
+    await Promise.all(infoMap.map(info =>
+      utils.unlinkFile(info.data.filename).catch(logger.error)
+    ))
+
+  return results
 }
 
-uploadsController.processFilesForDisplay = async (req, res, files, existingFiles) => {
-  const responseFiles = []
+self.stripTags = async (req, infoMap) => {
+  if (!self.parseStripTags(req.headers.striptags))
+    return
+
+  try {
+    await Promise.all(infoMap.map(info =>
+      utils.stripTags(info.data.filename, info.data.extname)
+    ))
+  } catch (error) {
+    // Unlink all files when at least one threat is found OR any errors occurred
+    // Should continue even when encountering errors
+    await Promise.all(infoMap.map(info =>
+      utils.unlinkFile(info.data.filename).catch(logger.error)
+    ))
+
+    // Re-throw error
+    throw error
+  }
+}
+
+self.storeFilesToDb = async (req, res, user, infoMap) => {
+  const files = []
+  const exists = []
+  const albumids = []
+
+  await Promise.all(infoMap.map(async info => {
+    // Create hash of the file
+    const hash = await new Promise((resolve, reject) => {
+      const result = crypto.createHash('md5')
+      fs.createReadStream(info.path)
+        .on('error', error => reject(error))
+        .on('end', () => resolve(result.digest('hex')))
+        .on('data', data => result.update(data, 'utf8'))
+    })
+
+    // Check if the file exists by checking its hash and size
+    const dbFile = await db.table('files')
+      .where(function () {
+        if (user === undefined)
+          this.whereNull('userid')
+        else
+          this.where('userid', user.id)
+      })
+      .where({
+        hash,
+        size: info.data.size
+      })
+      // Select expirydate to display expiration date of existing files as well
+      .select('name', 'expirydate')
+      .first()
+
+    if (dbFile) {
+      // Continue even when encountering errors
+      await utils.unlinkFile(info.data.filename).catch(logger.error)
+      // logger.log(`Unlinked ${info.data.filename} since a duplicate named ${dbFile.name} exists`)
+
+      // If on /nojs route, append original file name reported by client
+      if (req.path === '/nojs')
+        dbFile.original = info.data.originalname
+
+      exists.push(dbFile)
+      return
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000)
+    const data = {
+      name: info.data.filename,
+      original: info.data.originalname,
+      type: info.data.mimetype,
+      size: info.data.size,
+      hash,
+      // Only disable if explicitly set to false in config
+      ip: config.uploads.storeIP !== false ? req.ip : null,
+      timestamp
+    }
+
+    if (user) {
+      data.userid = user.id
+      data.albumid = info.data.albumid
+      if (data.albumid !== null && !albumids.includes(data.albumid))
+        albumids.push(data.albumid)
+    }
+
+    if (info.data.age)
+      data.expirydate = data.timestamp + (info.data.age * 3600) // Hours to seconds
+
+    files.push(data)
+
+    // Generate thumbs, but do not wait
+    if (utils.mayGenerateThumb(info.data.extname))
+      utils.generateThumbs(info.data.filename, info.data.extname).catch(logger.error)
+  }))
 
   if (files.length) {
+    let authorizedIds = []
+    if (albumids.length) {
+      authorizedIds = await db.table('albums')
+        .where({ userid: user.id })
+        .whereIn('id', albumids)
+        .select('id')
+        .then(rows => rows.map(row => row.id))
+
+      // Remove albumid if user do not own the album
+      for (const file of files)
+        if (file.albumid !== null && !authorizedIds.includes(file.albumid))
+          file.albumid = null
+    }
+
     // Insert new files to DB
     await db.table('files').insert(files)
+    utils.invalidateStatsCache('uploads')
 
-    for (const file of files)
-      responseFiles.push(file)
+    // Update albums' timestamp
+    if (authorizedIds.length) {
+      await db.table('albums')
+        .whereIn('id', authorizedIds)
+        .update('editedAt', Math.floor(Date.now() / 1000))
+      utils.invalidateAlbumsCache(authorizedIds)
+    }
   }
 
-  if (existingFiles.length)
-    for (const file of existingFiles)
-      responseFiles.push(file)
-
-  // We send response first before generating thumbnails and updating album timestamps
-  const nojs = req.path === '/nojs'
-  res.json({
-    success: true,
-    files: responseFiles.map(file => {
-      const result = {
-        name: file.name,
-        size: file.size,
-        url: `${config.domain}/${file.name}`
-      }
-      // Add original name if it's /nojs route
-      if (nojs) result.original = file.original
-      return result
-    })
-  })
-
-  const albumids = []
-  for (const file of files) {
-    if (file.albumid && !albumids.includes(file.albumid))
-      albumids.push(file.albumid)
-
-    if (utils.mayGenerateThumb(utils.extname(file.name)))
-      utils.generateThumbs(file.name)
-  }
-
-  if (albumids.length)
-    db.table('albums')
-      .whereIn('id', albumids)
-      .update('editedAt', Math.floor(Date.now() / 1000))
-      .catch(console.error)
+  return files.concat(exists)
 }
 
-uploadsController.delete = async (req, res) => {
+self.sendUploadResponse = async (req, res, result) => {
+  // Send response
+  res.json({
+    success: true,
+    files: result.map(file => {
+      const map = {
+        name: file.name,
+        url: `${config.domain}/${file.name}`
+      }
+
+      // If a temporary upload, add expiry date
+      if (file.expirydate)
+        map.expirydate = file.expirydate
+
+      // If on /nojs route, add original name
+      if (req.path === '/nojs')
+        map.original = file.original
+
+      return map
+    })
+  })
+}
+
+self.delete = async (req, res) => {
+  // Map /delete requests to /bulkdelete route
   const id = parseInt(req.body.id)
   const body = {
     field: 'id',
     values: isNaN(id) ? undefined : [id]
   }
   req.body = body
-  return uploadsController.bulkDelete(req, res)
+  return self.bulkDelete(req, res)
 }
 
-uploadsController.bulkDelete = async (req, res) => {
+self.bulkDelete = async (req, res) => {
   const user = await utils.authorize(req, res)
   if (!user) return
 
   const field = req.body.field || 'id'
   const values = req.body.values
 
-  if (!values || !Array.isArray(values) || !values.length)
+  if (!Array.isArray(values) || !values.length)
     return res.json({ success: false, description: 'No array of files specified.' })
 
-  const failed = await utils.bulkDeleteFiles(field, values, user, req.app.get('uploads-set'))
-  utils.invalidateStatsCache('uploads')
-  if (failed.length < values.length)
+  try {
+    const failed = await utils.bulkDeleteFromDb(field, values, user)
     return res.json({ success: true, failed })
-
-  return res.json({ success: false, description: 'Could not delete any files.' })
+  } catch (error) {
+    logger.error(error)
+    return res.status(500).json({ success: false, description: 'An unexpected error occurred. Try again?' })
+  }
 }
 
-uploadsController.list = async (req, res) => {
+self.list = async (req, res) => {
   const user = await utils.authorize(req, res)
   if (!user) return
 
-  // Headers is string-only, this seem to be the safest and lightest
-  const all = req.headers.all === '1'
-  const uploader = req.headers.uploader
+  const all = Boolean(req.headers.all)
+  const filters = req.headers.filters
   const ismoderator = perms.is(user, 'moderator')
-  if ((all || uploader) && !ismoderator) return res.status(403).end()
+  if ((all || filters) && !ismoderator)
+    return res.status(403).end()
 
-  let uploaderID = null
-  if (uploader)
-    uploaderID = await db.table('users')
-      .where('username', uploader)
-      .select('id')
-      .first()
-      .then(row => row ? row.id : null)
+  const basedomain = config.domain
 
-  function filter () {
-    if (req.params.id === undefined)
-      this.where('id', '<>', '')
-    else
-      this.where('albumid', req.params.id)
-    if (!ismoderator || !all)
-      this.where('userid', user.id)
-    else if (uploaderID)
-      this.where('userid', uploaderID)
+  // For filtering uploads
+  const _filters = {
+    uploaders: [],
+    names: [],
+    ips: [],
+    flags: {
+      nouser: false,
+      noip: false
+    }
   }
 
+  // Perhaps this can be simplified even further?
+  if (filters) {
+    const usernames = []
+    filters
+      .split(' ')
+      .map((v, i, a) => {
+        if (/[^\\]\\$/.test(v) && a[i + 1]) {
+          const tmp = `${v.slice(0, -1)} ${a[i + 1]}`
+          a[i + 1] = ''
+          return tmp
+        }
+        return v.replace(/\\\\/, '\\')
+      })
+      .map((v, i) => {
+        const x = v.indexOf(':')
+        if (x >= 0 && v.substring(x + 1))
+          return [v.substring(0, x), v.substring(x + 1)]
+        else if (v.startsWith('-'))
+          return [v]
+      })
+      .forEach(v => {
+        if (!v) return
+        if (v[0] === 'user') usernames.push(v[1])
+        else if (v[0] === 'name') _filters.names.push(v[1])
+        else if (v[0] === 'ip') _filters.ips.push(v[1])
+        else if (v[0] === '-user') _filters.flags.nouser = true
+        else if (v[0] === '-ip') _filters.flags.noip = true
+      })
+    _filters.uploaders = await db.table('users')
+      .whereIn('username', usernames)
+      .select('id', 'username')
+  }
+
+  function filter () {
+    if (req.params.id !== undefined)
+      this.where('albumid', req.params.id)
+    else if (!all)
+      this.where('userid', user.id)
+    else
+      // Fisrt, look for uploads matching ANY of the supplied 'user' OR 'ip' filters
+      // Then, refine the matches using the supplied 'name' filters
+      this.where(function () {
+        if (_filters.uploaders.length)
+          this.orWhereIn('userid', _filters.uploaders.map(v => v.id))
+        if (_filters.ips.length)
+          this.orWhereIn('ip', _filters.ips)
+        if (_filters.flags.nouser)
+          this.orWhereNull('userid')
+        if (_filters.flags.noip)
+          this.orWhereNull('ip')
+      }).andWhere(function () {
+        for (const name of _filters.names)
+          if (name.includes('*'))
+            this.orWhere('name', 'like', name.replace(/\*/g, '%'))
+          else
+            this.orWhere('name', name)
+      })
+  }
+
+  // Query uploads count for pagination
   const count = await db.table('files')
     .where(filter)
     .count('id as count')
     .then(rows => rows[0].count)
-  if (!count) return res.json({ success: true, files: [], count })
+  if (!count)
+    return res.json({ success: true, files: [], count })
 
   let offset = req.params.page
   if (offset === undefined) offset = 0
+
+  const columns = ['id', 'name', 'userid', 'size', 'timestamp']
+
+  if (temporaryUploads)
+    columns.push('expirydate')
+
+  // Only select IPs if we are listing all uploads
+  columns.push(all ? 'ip' : 'albumid')
 
   const files = await db.table('files')
     .where(filter)
     .orderBy('id', 'DESC')
     .limit(25)
     .offset(25 * offset)
-    .select('id', 'albumid', 'timestamp', 'name', 'userid', 'size')
+    .select(columns)
 
-  const albums = await db.table('albums')
-    .where(function () {
-      this.where('enabled', 1)
-      if (!all || !ismoderator)
-        this.where('userid', user.id)
-    })
-
-  const basedomain = config.domain
-  const userids = []
+  if (!files.length)
+    return res.json({ success: true, files, count, basedomain })
 
   for (const file of files) {
-    file.file = `${basedomain}/${file.name}`
-
-    file.album = ''
-    if (file.albumid !== undefined)
-      for (const album of albums)
-        if (file.albumid === album.id)
-          file.album = album.name
-
-    // Only push usernames if we are a moderator
-    if (all && ismoderator)
-      if (file.userid !== undefined && file.userid !== null && file.userid !== '')
-        userids.push(file.userid)
-
     file.extname = utils.extname(file.name)
     if (utils.mayGenerateThumb(file.extname))
-      file.thumb = `${basedomain}/thumbs/${file.name.slice(0, -file.extname.length)}.png`
+      file.thumb = `thumbs/${file.name.slice(0, -file.extname.length)}.png`
   }
 
-  // If we are a normal user, send response
-  if (!ismoderator) return res.json({ success: true, files, count })
+  // If we are not listing all uploads, query album names
+  let albums = {}
+  if (!all) {
+    const albumids = files
+      .map(file => file.albumid)
+      .filter((v, i, a) => {
+        return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
+      })
+    albums = await db.table('albums')
+      .whereIn('id', albumids)
+      .where('enabled', 1)
+      .where('userid', user.id)
+      .select('id', 'name')
+      .then(rows => {
+        // Build Object indexed by their IDs
+        const obj = {}
+        for (const row of rows)
+          obj[row.id] = row.name
+        return obj
+      })
+  }
 
-  // If we are a moderator but there are no uploads attached to a user, send response
-  if (userids.length === 0) return res.json({ success: true, files, count })
+  // If we are not listing all uploads, send response
+  if (!all)
+    return res.json({ success: true, files, count, albums, basedomain })
 
-  const users = await db.table('users').whereIn('id', userids)
-  for (const dbUser of users)
-    for (const file of files)
-      if (file.userid === dbUser.id)
-        file.username = dbUser.username
+  // Otherwise proceed to querying usernames
+  let _users = _filters.uploaders
+  if (!_users.length) {
+    const userids = files
+      .map(file => file.userid)
+      .filter((v, i, a) => {
+        return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
+      })
 
-  return res.json({ success: true, files, count })
+    // If there are no uploads attached to a registered user, send response
+    if (userids.length === 0)
+      return res.json({ success: true, files, count, basedomain })
+
+    // Query usernames of user IDs from currently selected files
+    _users = await db.table('users')
+      .whereIn('id', userids)
+      .select('id', 'username')
+  }
+
+  const users = {}
+  for (const user of _users)
+    users[user.id] = user.username
+
+  return res.json({ success: true, files, count, users, basedomain })
 }
 
-module.exports = uploadsController
+module.exports = self

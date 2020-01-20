@@ -1,53 +1,74 @@
-{% import '_globals.njk' as globals %}
+{%- import '_globals.njk' as globals -%}
+
+{# Set root domain here to inherit values from config file #}
+{%- set root = config.homeDomain or config.domain -%}
+
+{%- set title -%}
+{%- if metaTitle -%}
+{{ metaTitle + ' | ' + globals.name }}
+{%- else -%}
+{{ globals.name + ' – ' + globals.motto }}
+{%- endif %}
+{%- endset -%}
+
+{%- set url = root + (metaUrl or '') -%}
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="description" content="{{ globals.description }}">
+    <meta name="description" content="{{ metaDesc or globals.description }}">
     <meta name="keywords" content="upload,{{ globals.name }},file,images,hosting">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
-    <title>{{ title | default(globals.name + ' &#8211; ' + globals.motto) | safe }}</title>
+    <title>{{ title }}</title>
 
     {% block stylesheets %}
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="libs/bulma/bulma.min.css?v={{ globals.v3 }}">
-    <link rel="stylesheet" href="css/style.css?v={{ globals.v1 }}">
+    <link rel="stylesheet" href="libs/bulma/bulma.min.css{{ versions[3] }}">
+    <link rel="stylesheet" href="css/style.css{{ versions[1] }}">
     {% endblock %}
 
     {% block opengraph %}
     <!-- Open Graph tags -->
-    <meta property="og:url" content="{{ globals.root }}" />
+    <meta property="og:url" content="{{ url }}" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="{{ globals.name }} &#8211; {{ globals.motto }}" />
-    <meta property="og:description" content="{{ globals.description }}" />
-    <meta property="og:image" content="{{ globals.root }}/icons/600px.png?v={{ globals.v2 }}" />
+    <meta property="og:title" content="{{ title }}" />
+    <meta property="og:description" content="{{ metaDesc or globals.description }}" />
+    {%- if metaImage %}
+    <meta property="og:image" content="{{ metaImage }}" />
+    {%- endif %}
+    <meta property="og:image" content="{{ root }}/icons/600px.png{{ versions[2] }}" />
     <meta property="og:image:width" content="600" />
     <meta property="og:image:height" content="600" />
-    <meta property="og:image" content="{{ globals.root }}/images/fb_share.png?v={{ globals.v2 }}" />
+    <meta property="og:image" content="{{ root }}/images/fb_share.png{{ versions[2] }}" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:locale" content="en_US" />
 
     <!-- Twitter Card tags -->
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="{{ globals.name }} &#8211; {{ globals.motto }}">
-    <meta name="twitter:description" content="{{ globals.description }}">
-    <meta name="twitter:image" content="{{ globals.root }}/icons/600px.png?v={{ globals.v2 }}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ title }}">
+    <meta name="twitter:description" content="{{ metaDesc or globals.description }}">
+    {%- if metaImage %}
+    <meta name="twitter:image" content="{{ metaImage }}">
+    {% else %}
+    <meta name="twitter:image" content="{{ root }}/icons/600px.png{{ versions[2] }}">
+    {%- endif %}
     {% endblock %}
 
     <!-- Icons, configs, etcetera -->
-    <link rel="icon" href="{{ globals.root }}/icons/32pxr.png?v={{ globals.v2 }}" sizes="32x32">
-    <link rel="icon" href="{{ globals.root }}/icons/96pxr.png?v={{ globals.v2 }}" sizes="96x96">
-    <link rel="apple-touch-icon" href="{{ globals.root }}/icons/120px.png?v={{ globals.v2 }}" sizes="120x120">
-    <link rel="apple-touch-icon" href="{{ globals.root }}/icons/152px.png?v={{ globals.v2 }}" sizes="152x152">
-    <link rel="apple-touch-icon" href="{{ globals.root }}/icons/167px.png?v={{ globals.v2 }}" sizes="167x167">
-    <link rel="apple-touch-icon" href="{{ globals.root }}/icons/180px.png?v={{ globals.v2 }}" sizes="180x180">
-    <link rel="manifest" href="{{ globals.root }}/icons/manifest.json?v={{ globals.v2 }}">
+    <link rel="icon" href="{{ root }}/icons/32pxr.png{{ versions[2] }}" sizes="32x32">
+    <link rel="icon" href="{{ root }}/icons/96pxr.png{{ versions[2] }}" sizes="96x96">
+    <link rel="apple-touch-icon" href="{{ root }}/icons/120px.png{{ versions[2] }}" sizes="120x120">
+    <link rel="apple-touch-icon" href="{{ root }}/icons/152px.png{{ versions[2] }}" sizes="152x152">
+    <link rel="apple-touch-icon" href="{{ root }}/icons/167px.png{{ versions[2] }}" sizes="167x167">
+    <link rel="apple-touch-icon" href="{{ root }}/icons/180px.png{{ versions[2] }}" sizes="180x180">
+    <link rel="manifest" href="{{ root }}/icons/manifest.json{{ versions[2] }}">
     <meta name="apple-mobile-web-app-title" content="{{ globals.name }}">
     <meta name="application-name" content="{{ globals.name }}">
-    <meta name="msapplication-config" content="{{ globals.root }}/icons/browserconfig.xml?v={{ globals.v2 }}">
+    <meta name="msapplication-config" content="{{ root }}/icons/browserconfig.xml{{ versions[2] }}">
     <meta name="theme-color" content="#232629">
     {% block endmeta %}{% endblock %}
   </head>
