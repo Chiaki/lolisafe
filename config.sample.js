@@ -100,8 +100,22 @@ module.exports = {
   },
 
   /*
+    HTTP Strict Transport Security (HSTS).
+    This doesn't enforce HTTP users to switch to HTTPS.
+    It only tells HTTPS users to stick around (i.e. not to downgrade to HTTP).
+    When set, it's also added to HTTP responses because the header will be ignored anyway.
+    https://helmetjs.github.io/docs/hsts/#the-code
+  */
+  hsts: {
+    // maxAge: 63072000, // 2 years
+    // includeSubDomains: true,
+    // preload: true
+  },
+
+  /*
     Trust proxy.
-    Only enable if you are running this behind a proxy like Cloudflare, Incapsula, etc.
+    Enable this if you are using proxy such as Cloudflare or Incapsula,
+    and/or also when you are using reverse proxy such as nginx or Apache.
   */
   trustProxy: true,
 
@@ -141,13 +155,13 @@ module.exports = {
       }
     },
     {
-      // 4 requests in 30 seconds
+      // 6 requests in 30 seconds
       routes: [
         '/api/album/zip'
       ],
       config: {
         windowMs: 30 * 1000,
-        max: 4
+        max: 6
       }
     },
     {
@@ -449,6 +463,8 @@ module.exports = {
     ADVANCED: Use safe.fiery.me-exclusive cache control.
     This will only work properly with certain settings in nginx reverse proxy and Cloudflare.
     Do NOT enable unless you know what you are doing.
+    true: With CDN (Cloudflare)
+    2: When NOT using Cloudflare
   */
   cacheControl: false,
 

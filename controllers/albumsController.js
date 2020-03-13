@@ -352,14 +352,6 @@ self.get = async (req, res, next) => {
 
 self.generateZip = async (req, res, next) => {
   const versionString = parseInt(req.query.v)
-  const download = (filePath, fileName) => {
-    const headers = {}
-    if (config.cacheControl && versionString > 0) {
-      headers['Access-Control-Allow-Origin'] = '*'
-      headers['Cache-Control'] = 'public, max-age=2592000, must-revalidate, proxy-revalidate, immutable, stale-while-revalidate=86400, stale-if-error=604800'
-    }
-    return res.download(filePath, fileName, { headers })
-  }
 
   const identifier = req.params.identifier
   if (identifier === undefined)
@@ -398,7 +390,7 @@ self.generateZip = async (req, res, next) => {
       try {
         const filePath = path.join(paths.zips, `${identifier}.zip`)
         await paths.access(filePath)
-        return download(filePath, `${album.name}.zip`)
+        return res.download(filePath, `${album.name}.zip`)
       } catch (error) {
         // Re-throw error
         if (error.code !== 'ENOENT')
@@ -409,7 +401,7 @@ self.generateZip = async (req, res, next) => {
       logger.log(`Waiting previous zip task for album: ${identifier}.`)
       return self.zipEmitters.get(identifier).once('done', (filePath, fileName, json) => {
         if (filePath && fileName)
-          download(filePath, fileName)
+          res.download(filePath, fileName)
         else if (json)
           res.json(json)
       })
@@ -481,7 +473,7 @@ self.generateZip = async (req, res, next) => {
     const fileName = `${album.name}.zip`
 
     self.zipEmitters.get(identifier).emit('done', filePath, fileName)
-    return download(filePath, fileName)
+    return res.download(filePath, fileName)
   } catch (error) {
     logger.error(error)
     return res.status(500).json({ success: false, description: 'An unexpected error occurred. Try again?' })

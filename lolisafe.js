@@ -27,8 +27,15 @@ const nojs = require('./routes/nojs')
 
 const db = require('knex')(config.database)
 
-safe.use(helmet())
-if (config.trustProxy) safe.set('trust proxy', 1)
+safe.use(helmet({
+  hsts: false
+}))
+
+if (config.hsts instanceof Object && Object.keys(config.hsts).length)
+  safe.use(helmet.hsts(config.hsts))
+
+if (config.trustProxy)
+  safe.set('trust proxy', 1)
 
 // https://mozilla.github.io/nunjucks/api.html#configure
 nunjucks.configure('views', {
@@ -50,52 +57,76 @@ if (Array.isArray(config.rateLimits) && config.rateLimits.length)
 safe.use(bodyParser.urlencoded({ extended: true }))
 safe.use(bodyParser.json())
 
-let setHeaders
+let cdnPages
+let setHeaders = res => {
+  res.set('Access-Control-Allow-Origin', '*')
+}
 
 // Cache control (safe.fiery.me)
 if (config.cacheControl) {
   const cacheControls = {
-    // max-age: 30 days
-    default: 'public, max-age=2592000, must-revalidate, proxy-revalidate, immutable, stale-while-revalidate=86400, stale-if-error=604800',
-    // s-max-age: 30 days (only cache in proxy server)
-    // Obviously we have to purge proxy cache on every update
-    proxyOnly: 's-max-age=2592000, proxy-revalidate, stale-while-revalidate=86400, stale-if-error=604800',
+    // max-age: 6 months
+    static: 'public, max-age=15778800, must-revalidate, proxy-revalidate, immutable, stale-while-revalidate=86400, stale-if-error=604800',
+    // s-max-age: 6 months (only cache in CDN)
+    cdn: 's-max-age=15778800, proxy-revalidate, stale-while-revalidate=86400, stale-if-error=604800',
+    // validate cache's validity before using them (soft cache)
+    validate: 'no-cache',
+    // do not use cache at all
     disable: 'no-store'
   }
 
+  // By default soft cache everything
   safe.use('/', (req, res, next) => {
-    res.set('Cache-Control', cacheControls.proxyOnly)
+    res.set('Cache-Control', cacheControls.validate)
     next()
   })
 
-  // Do NOT cache these dynamic routes
-  safe.use(['/a', '/api', '/nojs'], (req, res, next) => {
-    res.set('Cache-Control', cacheControls.disable)
-    next()
-  })
+  // If using CDN, cache public pages in CDN
+  if (config.cacheControl !== 2) {
+    cdnPages = config.pages.concat(['api/check'])
+    for (const page of cdnPages)
+      safe.use(`/${page === 'home' ? '' : page}`, (req, res, next) => {
+        res.set('Cache-Control', cacheControls.cdn)
+        next()
+      })
+  }
 
-  // Cache these in proxy server though
-  safe.use(['/api/check'], (req, res, next) => {
-    res.set('Cache-Control', cacheControls.proxyOnly)
-    next()
-  })
+  // If serving uploads with node
+  if (config.serveFilesWithNode)
+    safe.use('/', express.static(paths.uploads, {
+      setHeaders: res => {
+        res.set('Access-Control-Allow-Origin', '*')
+        // If using CDN, cache uploads in CDN as well
+        // Use with cloudflare.purgeCache enabled in config file
+        if (config.cacheControl !== 2)
+          res.set('Cache-Control', cacheControls.cdn)
+      }
+    }))
 
-  // Cache album ZIPs
-  safe.use(['/api/album/zip'], (req, res, next) => {
-    setHeaders(res)
-    next()
-  })
-
-  // For static assets (and uploads if serving with node)
+  // Function for static assets.
+  // This requires the assets to use version in their query string,
+  // as they will be cached by clients for a very long time.
   setHeaders = res => {
     res.set('Access-Control-Allow-Origin', '*')
-    res.set('Cache-Control', cacheControls.default)
+    res.set('Cache-Control', cacheControls.static)
   }
+
+  // Consider album ZIPs static as well, since they use version in their query string
+  safe.use(['/api/album/zip'], (req, res, next) => {
+    res.set('Access-Control-Allow-Origin', '*')
+    const versionString = parseInt(req.query.v)
+    if (versionString > 0)
+      res.set('Cache-Control', cacheControls.static)
+    else
+      res.set('Cache-Control', cacheControls.disable)
+    next()
+  })
+} else if (config.serveFilesWithNode) {
+  // If serving uploads with node
+  safe.use('/', express.static(paths.uploads))
 }
 
-if (config.serveFilesWithNode)
-  safe.use('/', express.static(paths.uploads, { setHeaders }))
-
+// Static assets
 safe.use('/', express.static(paths.public, { setHeaders }))
 safe.use('/', express.static(paths.dist, { setHeaders }))
 
@@ -142,13 +173,13 @@ safe.use('/api', api)
 
     // Error pages
     safe.use((req, res, next) => {
-      if (config.cacheControl) res.removeHeader('Cache-Control')
+      res.setHeader('Cache-Control', 'no-store')
       res.status(404).sendFile(path.join(paths.errorRoot, config.errorPages[404]))
     })
 
     safe.use((error, req, res, next) => {
       logger.error(error)
-      if (config.cacheControl) res.removeHeader('Cache-Control')
+      res.setHeader('Cache-Control', 'no-store')
       res.status(500).sendFile(path.join(paths.errorRoot, config.errorPages[500]))
     })
 
@@ -196,12 +227,11 @@ safe.use('/api', api)
     logger.log(`lolisafe started on port ${config.port}`)
 
     // Cache control (safe.fiery.me)
-    // Also only if explicitly using Cloudflare
-    if (config.cacheControl)
+    // Purge Cloudflare cache
+    if (config.cacheControl && config.cacheControl !== 2)
       if (config.cloudflare.purgeCache) {
         logger.log('Cache control enabled, purging Cloudflare\'s cache...')
-        const routes = config.pages.concat(['api/check'])
-        const results = await utils.purgeCloudflareCache(routes)
+        const results = await utils.purgeCloudflareCache(cdnPages)
         let errored = false
         let succeeded = 0
         for (const result of results) {

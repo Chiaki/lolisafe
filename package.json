@@ -10,7 +10,7 @@
     "url": "https://github.com/BobbyWibowo/lolisafe/issues"
   },
   "engines": {
-    "node": ">=8.0.0"
+    "node": ">=10.0.0"
   },
   "license": "MIT",
   "scripts": {
@@ -25,36 +25,36 @@
     "clean-up": "node ./scripts/clean-up.js",
     "delete-expired": "node ./scripts/delete-expired.js",
     "thumbs": "node ./scripts/thumbs.js",
-    "pull": "git stash; git pull; yarn install --production; git stash pop; exit 0",
+    "pull": "git pull; yarn install --production",
     "full-upgrade": "rm yarn.lock; yarn install"
   },
   "dependencies": {
-    "bcrypt": "^3.0.7",
+    "bcrypt": "^4.0.1",
     "body-parser": "^1.19.0",
     "clamdjs": "^1.0.2",
     "express": "^4.17.1",
-    "express-rate-limit": "^5.0.0",
+    "express-rate-limit": "^5.1.1",
     "fluent-ffmpeg": "^2.1.2",
-    "helmet": "^3.21.2",
+    "helmet": "^3.21.3",
     "jszip": "^3.2.2",
-    "knex": "^0.20.7",
+    "knex": "^0.20.11",
     "multer": "^1.4.2",
     "node-fetch": "^2.6.0",
     "nunjucks": "^3.2.0",
     "randomstring": "^1.1.5",
     "readline": "^1.3.0",
-    "sharp": "^0.23.4",
+    "sharp": "^0.25.1",
     "sqlite3": "^4.1.1",
-    "systeminformation": "^4.18.1"
+    "systeminformation": "^4.23.0"
   },
   "devDependencies": {
-    "browserslist": "^4.8.3",
+    "browserslist": "^4.9.1",
     "cssnano": "^4.1.10",
     "del": "^5.1.0",
     "eslint": "^6.8.0",
     "eslint-config-standard": "^14.1.0",
-    "eslint-plugin-compat": "^3.3.0",
-    "eslint-plugin-import": "^2.19.1",
+    "eslint-plugin-compat": "^3.5.1",
+    "eslint-plugin-import": "^2.20.1",
     "eslint-plugin-node": "^11.0.0",
     "eslint-plugin-promise": "^4.2.1",
     "eslint-plugin-standard": "^4.0.1",
@@ -63,14 +63,14 @@
     "gulp-cli": "^2.2.0",
     "gulp-eslint": "^6.0.0",
     "gulp-if": "^3.0.0",
-    "gulp-nodemon": "^2.4.2",
+    "gulp-nodemon": "^2.5.0",
     "gulp-postcss": "^8.0.0",
     "gulp-replace": "^1.0.0",
     "gulp-sourcemaps": "^2.6.5",
-    "gulp-stylelint": "^11.0.0",
+    "gulp-stylelint": "^13.0.0",
     "gulp-terser": "^1.2.0",
     "postcss-preset-env": "^6.7.0",
-    "stylelint": "^12.0.1",
-    "stylelint-config-standard": "^19.0.0"
+    "stylelint": "^13.2.1",
+    "stylelint-config-standard": "^20.0.0"
   }
 }
