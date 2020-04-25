@@ -47,6 +47,7 @@ routes.get('/filelength/config', (req, res, next) => authController.getFileLengt
 routes.post('/filelength/change', (req, res, next) => authController.changeFileLength(req, res, next))
 routes.get('/users', (req, res, next) => authController.listUsers(req, res, next))
 routes.get('/users/:page', (req, res, next) => authController.listUsers(req, res, next))
+routes.post('/users/create', (req, res, next) => authController.createUser(req, res, next))
 routes.post('/users/edit', (req, res, next) => authController.editUser(req, res, next))
 routes.post('/users/disable', (req, res, next) => authController.disableUser(req, res, next))
 routes.post('/users/delete', (req, res, next) => authController.deleteUser(req, res, next))

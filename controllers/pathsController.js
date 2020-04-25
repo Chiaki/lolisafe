@@ -75,6 +75,8 @@ self.init = async () => {
     ))
     await self.rmdir(root)
   }))
+  if (uuidDirs.length)
+    logger.log(`Purged ${uuidDirs.length} unfinished chunks`)
 }
 
 module.exports = self

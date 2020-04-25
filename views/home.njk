@@ -28,6 +28,10 @@
 <script id="renderScript" data-version="{{ versions[4] }}" src="js/misc/render.js{{ versions[1] }}"></script>
 {% endblock %}
 
+{% block endmeta %}
+{% include "_partial/noscript-refresh.njk" %}
+{% endblock %}
+
 {% block content %}
 {{ super() }}
 <section id="home" class="hero is-fullheight">
@@ -143,7 +147,7 @@
           <p class="descriptive-progress"></p>
           <p class="error is-hidden"></p>
           <p class="link is-hidden">
-            <a target="_blank" rel="noopener"></a>
+            <a target="_blank"></a>
           </p>
           <p class="help expiry-date is-hidden"></p>
           <p class="clipboard-mobile is-hidden">

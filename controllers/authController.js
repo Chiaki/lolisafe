@@ -146,6 +146,72 @@ self.assertPermission = (user, target) => {
     throw new Error('Root user may not be tampered with.')
 }
 
+self.createUser = async (req, res, next) => {
+  const user = await utils.authorize(req, res)
+  if (!user) return
+
+  const isadmin = perms.is(user, 'admin')
+  if (!isadmin)
+    return res.status(403).end()
+
+  const username = typeof req.body.username === 'string'
+    ? req.body.username.trim()
+    : ''
+  if (username.length < self.user.min || username.length > self.user.max)
+    return res.json({ success: false, description: `Username must have ${self.user.min}-${self.user.max} characters.` })
+
+  let password = typeof req.body.password === 'string'
+    ? req.body.password.trim()
+    : ''
+  if (password.length) {
+    if (password.length < self.pass.min || password.length > self.pass.max)
+      return res.json({ success: false, description: `Password must have ${self.pass.min}-${self.pass.max} characters.` })
+  } else {
+    password = randomstring.generate(self.pass.rand)
+  }
+
+  let group = req.body.group
+  let permission
+  if (group !== undefined) {
+    permission = perms.permissions[group]
+    if (typeof permission !== 'number' || permission < 0) {
+      group = 'user'
+      permission = perms.permissions.user
+    }
+  }
+
+  try {
+    const user = await db.table('users')
+      .where('username', username)
+      .first()
+
+    if (user)
+      return res.json({ success: false, description: 'Username already exists.' })
+
+    const hash = await bcrypt.hash(password, saltRounds)
+
+    const token = await tokens.generateUniqueToken()
+    if (!token)
+      return res.json({ success: false, description: 'Sorry, we could not allocate a unique token. Try again?' })
+
+    await db.table('users')
+      .insert({
+        username,
+        password: hash,
+        token,
+        enabled: 1,
+        permission
+      })
+    utils.invalidateStatsCache('users')
+    tokens.onHold.delete(token)
+
+    return res.json({ success: true, username, password, group })
+  } catch (error) {
+    logger.error(error)
+    return res.status(500).json({ success: false, description: 'An unexpected error occurred. Try again?' })
+  }
+}
+
 self.editUser = async (req, res, next) => {
   const user = await utils.authorize(req, res)
   if (!user) return
@@ -193,7 +259,7 @@ self.editUser = async (req, res, next) => {
     utils.invalidateStatsCache('users')
 
     const response = { success: true, update }
-    if (password) response.password = password
+    if (password) response.update.password = password
     return res.json(response)
   } catch (error) {
     logger.error(error)

@@ -190,7 +190,8 @@ li[data-action="page-ellipsis"] {
   text-decoration: line-through
 }
 
-#menu.is-loading .menu-list a {
+#menu.is-loading .menu-list a,
+.pagination.is-loading a:not([disabled]) {
   cursor: progress
 }
 

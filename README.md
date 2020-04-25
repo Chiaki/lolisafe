@@ -16,7 +16,7 @@ Configuration file of lolisafe, `config.js`, is also NOT fully compatible with t
 
 ## Running in production mode
 
-1. Ensure you have at least Node v8.0.0 installed (v10.x is recommended).
+1. Ensure you have Node v10.x installed (v12.x have NOT been tested).
 2. Clone this repo.
 3. Copy `config.sample.js` as `config.js`.
 4. Modify port, domain and privacy options if desired.

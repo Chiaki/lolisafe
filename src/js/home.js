@@ -39,6 +39,7 @@ const page = {
   tabs: [],
   activeTab: null,
   albumSelect: null,
+  albumSelectOnChange: null,
   previewTemplate: null,
 
   dropzone: null,
@@ -52,7 +53,7 @@ const page = {
   // Include BMP for uploads preview only, cause the real images will be used
   // Sharp isn't capable of making their thumbnails for dashboard and album public pages
   imageExts: ['.webp', '.jpg', '.jpeg', '.bmp', '.gif', '.png', '.tiff', '.tif', '.svg'],
-  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv'],
+  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv', '.m4v', '.m2ts'],
 
   albumTitleMaxLength: 70,
   albumDescMaxLength: 4000
@@ -187,12 +188,13 @@ page.prepareUpload = () => {
     document.querySelector('#albumDiv').classList.remove('is-hidden')
 
     page.albumSelect = document.querySelector('#albumSelect')
-    page.albumSelect.addEventListener('change', () => {
+    page.albumSelectOnChange = () => {
       page.album = parseInt(page.albumSelect.value)
       // Re-generate ShareX config file
       if (typeof page.prepareShareX === 'function')
         page.prepareShareX()
-    })
+    }
+    page.albumSelect.addEventListener('change', page.albumSelectOnChange)
 
     // Fetch albums
     page.fetchAlbums()
@@ -337,9 +339,12 @@ page.prepareDropzone = () => {
             page.dropzone._handleUploadError(instances, xhr, 'Connection timed out. Try to reduce upload chunk size.')
           }
 
-        // Add start timestamp of upload attempt
-        if (xhr._start === undefined)
-          xhr._start = Date.now()
+        // Attach necessary data for initial upload speed calculation
+        if (xhr._uplSpeedCalc === undefined)
+          xhr._uplSpeedCalc = {
+            lastSent: 0,
+            data: [{ timestamp: Date.now(), bytes: 0 }]
+          }
 
         // If not chunked uploads, add extra headers
         if (!file.upload.chunked) {
@@ -379,15 +384,55 @@ page.prepareDropzone = () => {
           prefix = `Uploading chunk ${chunkIndex}/${file.upload.totalChunkCount}\u2026`
         }
 
+        // Real-time upload speed calculation
         let prettyBytesPerSec
         if (!skipProgress) {
-          const elapsed = (Date.now() - xhr._start) / 1000
-          const bytesPerSec = elapsed ? (upl.bytesSent / elapsed) : 0
-          prettyBytesPerSec = page.getPrettyBytes(bytesPerSec)
+          const now = Date.now()
+          const bytesSent = upl.bytesSent - xhr._uplSpeedCalc.lastSent
+
+          // Push data of current iteration
+          xhr._uplSpeedCalc.lastSent = upl.bytesSent
+          xhr._uplSpeedCalc.data.push({ timestamp: now, bytes: bytesSent })
+
+          // Wait till at least the 2nd iteration (3 data including initial data)
+          const length = xhr._uplSpeedCalc.data.length
+          if (length > 2) {
+            // Calculate using data from all iterations
+            let elapsed = 0
+            let bytesPerSec = 0
+            let fullSec = false
+            let i = length - 1 // Always start with 2nd from last item
+            while (i--) {
+              // Splice data of unrequired iterations
+              if (fullSec) {
+                xhr._uplSpeedCalc.data.splice(i, 1)
+                continue
+              }
+              // Sum data
+              elapsed = now - xhr._uplSpeedCalc.data[i].timestamp
+              if (elapsed > 1000) {
+                const excessDuration = elapsed - 1000
+                const newerIterationElapsed = now - xhr._uplSpeedCalc.data[i + 1].timestamp
+                const duration = elapsed - newerIterationElapsed
+                const fragment = (duration - excessDuration) / duration * xhr._uplSpeedCalc.data[i + 1].bytes
+                bytesPerSec += fragment
+                fullSec = true
+              } else {
+                bytesPerSec += xhr._uplSpeedCalc.data[i + 1].bytes
+              }
+            }
+
+            // If not enough data
+            if (!fullSec)
+              bytesPerSec = 1000 / elapsed * bytesPerSec
+
+            // Get pretty bytes
+            prettyBytesPerSec = page.getPrettyBytes(bytesPerSec)
+          }
         }
 
         file.previewElement.querySelector('.descriptive-progress').innerHTML =
-          `${prefix} ${percentage}%${prettyBytesPerSec ? ` at ~${prettyBytesPerSec}/s` : ''}`
+          `${prefix} ${percentage}%${prettyBytesPerSec ? ` at ${prettyBytesPerSec}/s` : ''}`
       })
 
       this.on('success', (file, data) => {
@@ -673,6 +718,7 @@ page.createAlbum = () => {
       option.value = response.data.id
       option.innerHTML = name
       option.selected = true
+      page.albumSelectOnChange()
 
       swal('Woohoo!', 'Album was created successfully.', 'success')
     }).catch(page.onError)

@@ -58,6 +58,10 @@ self.getFiles = async directory => {
     return thumb.slice(0, -extname.length)
   })
 
+  console.log(`Found ${thumbs.length} existing thumbnails (may include placeholder symlinks).`)
+  if (!self.verbose)
+    console.log('Verbose logging disabled! Please be patient, this script may appear to be frozen but is actually working in the background\u2026')
+
   const succeeded = []
   let error = 0
   let skipped = 0

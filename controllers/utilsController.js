@@ -16,7 +16,10 @@ const self = {
     scanner: null,
     timeout: config.uploads.scan.timeout || 5000,
     chunkSize: config.uploads.scan.chunkSize || 64 * 1024,
-    groupBypass: config.uploads.scan.groupBypass || null
+    groupBypass: config.uploads.scan.groupBypass || null,
+    whitelistExtensions: (Array.isArray(config.uploads.scan.whitelistExtensions) &&
+     config.uploads.scan.whitelistExtensions.length) ? config.uploads.scan.whitelistExtensions : null,
+    maxSize: (parseInt(config.uploads.scan.maxSize) * 1e6) || null
   },
   gitHash: null,
   idSet: null,
@@ -24,20 +27,16 @@ const self = {
   idMaxTries: config.uploads.maxTries || 1,
 
   imageExts: ['.webp', '.jpg', '.jpeg', '.gif', '.png', '.tiff', '.tif', '.svg'],
-  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv'],
+  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv', '.m4v', '.m2ts'],
 
   ffprobe: promisify(ffmpeg.ffprobe),
 
-  albumsCache: {}
+  albumsCache: {},
+  timezoneOffset: new Date().getTimezoneOffset()
 }
 
 const statsCache = {
   system: {
-    cache: null,
-    generating: false,
-    generatedAt: 0
-  },
-  disk: {
     cache: null,
     generating: false,
     generatedAt: 0
@@ -62,7 +61,15 @@ const statsCache = {
   }
 }
 
-const cloudflareAuth = config.cloudflare && config.cloudflare.apiKey && config.cloudflare.email && config.cloudflare.zoneId
+if (config.linuxDiskStats)
+  statsCache.disk = {
+    cache: null,
+    generating: false,
+    generatedAt: 0
+  }
+
+const cloudflareAuth = config.cloudflare && config.cloudflare.apiKey &&
+  config.cloudflare.email && config.cloudflare.zoneId
 
 self.mayGenerateThumb = extname => {
   return (config.uploads.generateThumbs.image && self.imageExts.includes(extname)) ||
@@ -100,7 +107,7 @@ self.extname = filename => {
   return extname + multi
 }
 
-self.escape = (string) => {
+self.escape = string => {
   // MIT License
   // Copyright(c) 2012-2013 TJ Holowaychuk
   // Copyright(c) 2015 Andreas Lubbe
@@ -285,12 +292,15 @@ self.generateThumbs = async (name, extname, force) => {
       return false
     }
   } catch (error) {
+    // TODO: Parse ffmpeg/ffprobe errors into concise error messages (get rid of versions info)
     // Suppress error logging for errors matching these patterns
     const errorString = error.toString()
     const suppress = [
       /Input file contains unsupported image format/,
       /Invalid data found when processing input/,
-      /File does not have valid required data/
+      /File does not have valid required data/,
+      /Could not find codec parameters/,
+      /Duplicate element/
     ]
 
     if (!suppress.some(t => t.test(errorString)))
@@ -621,7 +631,7 @@ self.stats = async (req, res, next) => {
     }
 
     // Disk usage, only for Linux platform
-    if (os.platform === 'linux')
+    if (config.linuxDiskStats && os.platform === 'linux')
       if (!statsCache.disk.cache && statsCache.disk.generating) {
         stats.disk = false
       } else if (((Date.now() - statsCache.disk.generatedAt) <= 60000) || statsCache.disk.generating) {
@@ -779,8 +789,7 @@ self.stats = async (req, res, next) => {
         others: 0
       }
 
-      if (os.platform !== 'linux') {
-        // If not Linux platform, rely on DB for total size
+      if (!config.linuxDiskStats || os.platform !== 'linux') {
         const uploads = await db.table('files')
           .select('size')
         stats.uploads.total = uploads.length

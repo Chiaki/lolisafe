@@ -45,6 +45,7 @@ const page = {
     },
     // config of users view
     users: {
+      filters: null, // users' filters
       pageNum: null
     }
   },
@@ -80,8 +81,8 @@ const page = {
   lazyLoad: null,
 
   imageExts: ['.webp', '.jpg', '.jpeg', '.gif', '.png', '.tiff', '.tif', '.svg'],
-  // some of these extensions can not be played directly in browsers
-  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv'],
+  // TODO: Disable "Load original" button with non-streamable extensions
+  videoExts: ['.webm', '.mp4', '.wmv', '.avi', '.mov', '.mkv', '.m4v', '.m2ts'],
 
   isTriggerLoading: null,
   fadingIn: null,
@@ -199,7 +200,7 @@ page.prepareDashboard = () => {
     // Add onclick event listener
     const item = document.querySelector(itemMenus[i].selector)
     item.addEventListener('click', event => {
-      // This class name isn't actually being applied fast enough
+      // TODO: This class name isn't actually being applied fast enough
       if (page.menusContainer.classList.contains('is-loading'))
         return
 
@@ -241,11 +242,18 @@ page.logout = params => {
 page.updateTrigger = (trigger, newState) => {
   if (!trigger) return
 
-  // Disable menus container when loading
-  if (newState === 'loading')
+  // Disable menus container and pagination when loading
+  if (newState === 'loading') {
     page.menusContainer.classList.add('is-loading')
-  else
+    const paginations = page.dom.querySelectorAll('.pagination')
+    for (let i = 0; i < paginations.length; i++)
+      paginations[i].classList.add('is-loading')
+  } else {
     page.menusContainer.classList.remove('is-loading')
+    const paginations = page.dom.querySelectorAll('.pagination.is-loading')
+    for (let i = 0; i < paginations.length; i++)
+      paginations[i].classList.remove('is-loading')
+  }
 
   if (newState === 'loading') {
     trigger.classList.add('is-loading')
@@ -297,46 +305,60 @@ page.domClick = event => {
   const action = element.dataset.action
 
   switch (action) {
+    // Uploads
     case 'view-list':
       return page.setUploadsView('list', element)
     case 'view-thumbs':
       return page.setUploadsView('thumbs', element)
-    case 'clear-selection':
-      return page.clearSelection()
-    case 'add-selected-uploads-to-album':
-      return page.addSelectedUploadsToAlbum()
-    case 'select':
-      return page.select(element, event)
-    case 'select-all':
-      return page.selectAll(element)
     case 'add-to-album':
       return page.addToAlbum(id)
     case 'delete-upload':
       return page.deleteUpload(id)
+    case 'add-selected-uploads-to-album':
+      return page.addSelectedUploadsToAlbum()
     case 'bulk-delete-uploads':
       return page.bulkDeleteUploads()
     case 'display-preview':
       return page.displayPreview(id)
+    // Manage uploads
+    case 'upload-filters-help':
+      return page.uploadFiltersHelp(element)
+    case 'filter-uploads':
+      return page.filterUploads(element)
+    // Manage your albums
     case 'submit-album':
       return page.submitAlbum(element)
     case 'edit-album':
       return page.editAlbum(id)
     case 'delete-album':
       return page.deleteAlbum(id)
-    case 'get-new-token':
-      return page.getNewToken(element)
+    // Manage users
+    case 'create-user':
+      return page.createUser()
     case 'edit-user':
       return page.editUser(id)
     case 'disable-user':
       return page.disableUser(id)
     case 'delete-user':
       return page.deleteUser(id)
-    case 'filters-help':
-      return page.filtersHelp(element)
-    case 'filter-uploads':
-      return page.filterUploads(element)
     case 'view-user-uploads':
       return page.viewUserUploads(id, element)
+    /* // WIP
+    case 'user-filters-help':
+      return page.userFiltersHelp(element)
+    case 'filter-users':
+      return page.filterUsers(element)
+    */
+    // Others
+    case 'get-new-token':
+      return page.getNewToken(element)
+    // Uploads & Users
+    case 'clear-selection':
+      return page.clearSelection()
+    case 'select':
+      return page.select(element, event)
+    case 'select-all':
+      return page.selectAll(element)
     case 'page-ellipsis':
       return page.focusJumpToPage()
     case 'page-prev':
@@ -368,6 +390,10 @@ page.fadeAndScroll = disableFading => {
 }
 
 page.switchPage = (action, element) => {
+  // Skip if other pagination buttons are still loading
+  const isLoading = page.dom.querySelectorAll('.pagination.is-loading')
+  if (isLoading.length) return
+
   // eslint-disable-next-line compat/compat
   const params = Object.assign({
     trigger: element
@@ -426,6 +452,11 @@ page.getUploads = (params = {}) => {
     filters: params.filters || ''
   }
 
+  // Send client timezone offset if using date filter
+  // Server will pretend client is on UTC if missing
+  if (headers.filters.includes('date:') || headers.filters.includes('expiry:'))
+    headers.minOffset = new Date().getTimezoneOffset()
+
   axios.get(url, { headers }).then(response => {
     if (response.data.success === false)
       if (response.data.description === 'No token provided') {
@@ -461,10 +492,10 @@ page.getUploads = (params = {}) => {
           <form class="prevent-default">
             <div class="field has-addons">
               <div class="control is-expanded">
-                <input id="filters" class="input is-small" type="text" placeholder="Filters" value="${params.filters || ''}">
+                <input id="filters" class="input is-small" type="text" placeholder="Filters" value="${page.escape(params.filters || '')}">
               </div>
               <div class="control">
-                <button type="button" class="button is-small is-primary is-outlined" title="Help?" data-action="filters-help">
+                <button type="button" class="button is-small is-primary is-outlined" title="Help?" data-action="upload-filters-help">
                   <span class="icon">
                     <i class="icon-help-circled"></i>
                   </span>
@@ -613,9 +644,9 @@ page.getUploads = (params = {}) => {
         div.dataset.id = upload.id
 
         if (upload.thumb !== undefined)
-          div.innerHTML = `<a class="image" href="${upload.file}" target="_blank" rel="noopener"><img alt="${upload.name}" data-src="${upload.thumb}"/></a>`
+          div.innerHTML = `<a class="image" href="${upload.file}" target="_blank"><img alt="${upload.name}" data-src="${upload.thumb}"/></a>`
         else
-          div.innerHTML = `<a class="image" href="${upload.file}" target="_blank" rel="noopener"><h1 class="title">${upload.extname || 'N/A'}</h1></a>`
+          div.innerHTML = `<a class="image" href="${upload.file}" target="_blank"><h1 class="title">${upload.extname || 'N/A'}</h1></a>`
 
         div.innerHTML += `
           <input type="checkbox" class="checkbox" title="Select" data-index="${i}" data-action="select"${upload.selected ? ' checked' : ''}>
@@ -663,7 +694,7 @@ page.getUploads = (params = {}) => {
             <thead>
               <tr>
                 <th><input id="selectAll" class="checkbox" type="checkbox" title="Select all" data-action="select-all"></th>
-                <th>File</th>
+                <th>File name</th>
                 ${params.album === undefined ? `<th>${params.all ? 'User' : 'Album'}</th>` : ''}
                 <th>Size</th>
                 ${params.all ? '<th>IP</th>' : ''}
@@ -687,7 +718,7 @@ page.getUploads = (params = {}) => {
         tr.dataset.id = upload.id
         tr.innerHTML = `
           <td class="controls"><input type="checkbox" class="checkbox" title="Select" data-index="${i}" data-action="select"${upload.selected ? ' checked' : ''}></td>
-          <th><a href="${upload.file}" target="_blank" rel="noopener" title="${upload.file}">${upload.name}</a></th>
+          <th><a href="${upload.file}" target="_blank" title="${upload.file}">${upload.name}</a></th>
           ${params.album === undefined ? `<th>${upload.appendix}</th>` : ''}
           <td>${upload.prettyBytes}</td>
           ${params.all ? `<td>${upload.ip || ''}</td>` : ''}
@@ -943,34 +974,74 @@ page.clearSelection = () => {
   })
 }
 
-page.filtersHelp = element => {
+page.uploadFiltersHelp = element => {
   const content = document.createElement('div')
   content.style = 'text-align: left'
   content.innerHTML = `
-    This supports 3 filter keys, namely <b>user</b> (username), <b>ip</b> and <b>name</b> (upload name).
-    Each key can be specified more than once.
-    Backlashes should be used if the usernames have spaces.
-    There are also 2 additional flags, namely <b>-user</b> and <b>-ip</b>, which will match uploads by non-registered users and have no IPs respectively.
+    There are 2 filter keys, namely <b>user</b> (username) and <b>ip</b>.
+    These keys can be specified more than once.
+    For usernames with whitespaces, wrap them with double quotes (<code>"</code>).
+    Special cases such as uploads by non-registered users or have no IPs respectively, use <code>user:-</code> or <code>ip:-</code>.
 
-    How does it work?
-    First, it will filter uploads matching ANY of the supplied <b>user</b> or <b>ip</b> keys.
-    Then, it will refine the matches using the supplied <b>name</b> keys.
+    To exclude certain users/ips while still listing every other uploads, add negation sign (<code>-</code>) before the keys.
+    Negation sign can also be used to exclude the special cases mentioned above (i.e. <code>-user:-</code> or <code>-ip:-</code>).
 
-    Examples:
+    There are 2 range keys: <b>date</b> (upload date) and <b>expiry</b> (expiry date).
+    Their format is: <code>YYYY/MM/DD HH:MM:SS-YYYY/MM/DD HH:MM:SS</code> ("from" date and "to" date respectively).
+    You can specify only one date. If "to" date is missing, 'now' will be used. If "from" date is missing, 'beginning of time' will be used.
+    If any of the subsequent date or time units are not specified, their first value will be used (e.g. January for month, 1 for day, and so on).
+    If only time is specified, today's date will be used.
+    In conclusion, the following examples are all valid: <code>date:2020/01/01 01:23-2018/01/01 06</code>, <code>expiry:-2020/05</code>, <code>date:12:34:56</code>.
+    These keys can only be specified once each.
 
-    Uploads from user with username "demo":
-    <code>user:demo</code>
+    <b>Timezone?</b> Don't fret, feel free to query the dates with your own timezone!
+    API requests to the filter endpoint will attach your browser's timezone offset, so the server will automatically calculate timezone differences.
 
-    Uploads from users with username either "John Doe" OR "demo":
-    <code>user:John\\ Doe user:demo</code>
+    Matches can also be sorted with <b>sort</b> keys.
+    Its format is: <code>sort:columnName[:d[escending]]</code>, where <code>:d[escending]</code> is an optional tag to set the direction to descending.
+    This key must be used with internal column names used in the database (<code>id</code>, <code>userid</code>, and so on),
+    but there are 2 shortcuts available: <b>date</b> for <code>timestamp</code> column and <b>expiry</b> for <code>expirydate</code> column.
+    This key can also be specified more than once, where their order will decide the sorting steps.
 
-    Uploads from IP "127.0.0.1" AND which upload names match "*.rar" OR "*.zip":
-    <code>ip:127.0.0.1 name:*.rar name:*.zip</code>
+    Any leftover keywords which do not use keys (non-keyed keywords) will be matched against the matches' file names.
+    Excluding certain keywords is also supported by adding negation sign (<b>-</b>) before the keywords.
 
-    Uploads from user with username "test" OR from non-registered users:
-    <code>user:test -user</code>
+    <b>Internals:</b>
+    First, query uploads passing ALL exclusion filter keys OR matching ANY filter keys, if any.
+    Second, refine matches using range keys, if any.
+    Third, refine matches using ANY non-keyed keywords, if any.
+    Fourth, filter matches using ALL exclusion non-keyed keywords, if any.
+    Fifth, sort matches using sorting keys, if any.
+
+    <b>Examples:</b>
+    Uploads from users named "demo" AND/OR "John Doe" AND/OR non-registered users:
+    <code>user:demo user:"John Doe" user:-</code>
+    ALL uploads, but NOT the ones from user named "demo" AND "John Doe":
+    <code>-user:demo -user:"John Doe"</code>
+    Uploads from IP "127.0.0.1" AND which file names match "*.rar" OR "*.zip":
+    <code>ip:127.0.0.1 *.rar *.zip</code>
+    Uploads uploaded since "1 June 2019 00:00:00":
+    <code>date:2019/06</code>
+    Uploads uploaded between "7 April 2020 12:00:00" and "7 April 2020 23:59:59":
+    <code>date:2020/04/07 12-2020/04/07 23:59:59</code>
+    Uploads uploaded before "5 February 2020 00:00:00":
+    <code>date:-2020/02/05</code>
+    Uploads which file names match "*.gz" but NOT "*.tar.gz":
+    <code>*.gz -*.tar.gz</code>
+    Sort matches by "size" column in ascending and descending order respectively:
+    <code>user:"John Doe" sort:size</code>
+    <code>*.mp4 user:- sort:size:d</code>
+
+    <b>Friendly reminder:</b> This window can be scrolled up!
   `.trim().replace(/^ {6}/gm, '').replace(/\n/g, '<br>')
-  swal({ content })
+
+  swal({ content }).then(() => {
+    // Restore modal size
+    document.body.querySelector('.swal-overlay .swal-modal').classList.remove('is-expanded')
+  })
+
+  // Expand modal size
+  document.body.querySelector('.swal-overlay .swal-modal:not(.is-expanded)').classList.add('is-expanded')
 }
 
 page.filterUploads = element => {
@@ -982,9 +1053,13 @@ page.viewUserUploads = (id, element) => {
   const user = page.cache.users[id]
   if (!user) return
   element.classList.add('is-loading')
+  // Wrap username in quotes if it contains whitespaces
+  const username = user.username.includes(' ')
+    ? `"${user.username}"`
+    : user.username
   page.getUploads({
     all: true,
-    filters: `user:${user.username.replace(/ /g, '\\ ')}`,
+    filters: `user:${username}`,
     trigger: document.querySelector('#itemManageUploads')
   })
 }
@@ -1384,7 +1459,7 @@ page.getAlbums = (params = {}) => {
         <th>${album.name}</th>
         <th>${album.files}</th>
         <td>${album.prettyDate}</td>
-        <td><a ${album.public ? `href="${albumUrl}"` : 'class="is-linethrough"'} target="_blank" rel="noopener">${albumUrl}</a></td>
+        <td><a ${album.public ? `href="${albumUrl}"` : 'class="is-linethrough"'} target="_blank">${albumUrl}</a></td>
         <td class="has-text-right" data-id="${album.id}">
           <a class="button is-small is-primary is-outlined" title="Edit album" data-action="edit-album">
             <span class="icon is-small">
@@ -1673,7 +1748,9 @@ page.changeToken = (params = {}) => {
       swal({
         title: 'Woohoo!',
         text: 'Your token was successfully changed.',
-        icon: 'success'
+        icon: 'success',
+        buttons: false,
+        timer: 1500
       }).then(() => {
         axios.defaults.headers.common.token = response.data.token
         localStorage[lsKeys.token] = response.data.token
@@ -1792,9 +1869,34 @@ page.getUsers = (params = {}) => {
 
     const pagination = page.paginate(response.data.count, 25, params.pageNum)
 
+    const filter = `
+      <div class="column">
+        <form class="prevent-default">
+          <div class="field has-addons">
+            <div class="control is-expanded">
+              <input id="filters" class="input is-small" type="text" placeholder="Filters (WIP)" value="${page.escape(params.filters || '')}" disabled>
+            </div>
+            <div class="control">
+              <button type="button" class="button is-small is-primary is-outlined" title="Help? (WIP)" data-action="user-filters-help" disabled>
+                <span class="icon">
+                  <i class="icon-help-circled"></i>
+                </span>
+              </button>
+            </div>
+            <div class="control">
+              <button type="submit" class="button is-small is-info is-outlined" title="Filter users (WIP)" data-action="filter-users" disabled>
+                <span class="icon">
+                  <i class="icon-filter"></i>
+                </span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    `
     const extraControls = `
       <div class="columns">
-        <div class="column is-hidden-mobile"></div>
+        ${filter}
         <div class="column is-one-quarter">
           <form class="prevent-default">
             <div class="field has-addons">
@@ -1815,21 +1917,27 @@ page.getUsers = (params = {}) => {
     `
 
     const controls = `
-      <div class="columns is-hidden">
-        <div class="column is-hidden-mobile"></div>
+      <div class="columns">
+        <div class="column has-text-left">
+          <a class="button is-small is-primary is-outlined" title="Create new user" data-action="create-user">
+            <span class="icon">
+              <i class="icon-plus"></i>
+            </span>
+            <span>Create new user</span>
+        </a>
+        </div>
         <div class="column has-text-right">
-          <a class="button is-small is-info" title="Clear selection" data-action="clear-selection">
+          <a class="button is-small is-info is-outlined" title="Clear selection" data-action="clear-selection">
             <span class="icon">
               <i class="icon-cancel"></i>
             </span>
           </a>
-          <a class="button is-small is-warning" title="Bulk disable (WIP)" data-action="bulk-disable-users" disabled>
+          <a class="button is-small is-warning is-outlined" title="Bulk disable (WIP)" data-action="bulk-disable-users" disabled>
             <span class="icon">
               <i class="icon-hammer"></i>
             </span>
-            <span>Bulk disable</span>
           </a>
-          <a class="button is-small is-danger" title="Bulk delete (WIP)" data-action="bulk-delete-users" disabled>
+          <a class="button is-small is-danger is-outlined" title="Bulk delete (WIP)" data-action="bulk-delete-users" disabled>
             <span class="icon">
               <i class="icon-trash"></i>
             </span>
@@ -1850,8 +1958,7 @@ page.getUsers = (params = {}) => {
         <table class="table is-narrow is-fullwidth is-hoverable">
           <thead>
             <tr>
-              <th class="is-hidden"><input id="selectAll" class="checkbox" type="checkbox" title="Select all" data-action="select-all"></th>
-              <th>ID</th>
+              <th><input id="selectAll" class="checkbox" type="checkbox" title="Select all" data-action="select-all"></th>
               <th>Username</th>
               <th>Uploads</th>
               <th>Usage</th>
@@ -1892,8 +1999,7 @@ page.getUsers = (params = {}) => {
       const tr = document.createElement('tr')
       tr.dataset.id = user.id
       tr.innerHTML = `
-        <td class="controls is-hidden"><input type="checkbox" class="checkbox" title="Select" data-action="select"${selected ? ' checked' : ''}></td>
-        <th>${user.id}</th>
+        <td class="controls"><input type="checkbox" class="checkbox" title="Select" data-index="${i}" data-action="select"${selected ? ' checked' : ''}></td>
         <th${enabled ? '' : ' class="is-linethrough"'}>${user.username}</td>
         <th>${user.uploads}</th>
         <td>${page.getPrettyBytes(user.usage)}</td>
@@ -1939,6 +2045,82 @@ page.getUsers = (params = {}) => {
   }).catch(error => {
     page.updateTrigger(params.trigger)
     page.onAxiosError(error)
+  })
+}
+
+page.createUser = () => {
+  const groupOptions = Object.keys(page.permissions).map((g, i, a) => {
+    const disabled = !(a[i + 1] && page.permissions[a[i + 1]])
+    return `<option value="${g}"${disabled ? ' disabled' : ''}>${g}</option>`
+  }).join('\n')
+
+  const div = document.createElement('div')
+  div.innerHTML = `
+    <div class="field">
+      <label class="label">Username</label>
+      <div class="controls">
+        <input id="swalUsername" class="input" type="text">
+      </div>
+    </div>
+    <div class="field">
+      <label class="label">Password (optional)</label>
+      <div class="controls">
+        <input id="swalPassword" class="input" type="text">
+      </div>
+    </div>
+    <div class="field">
+      <label class="label">User group</label>
+      <div class="control">
+        <div class="select is-fullwidth">
+          <select id="swalGroup">
+            ${groupOptions}
+          </select>
+        </div>
+      </div>
+    </div>
+  `
+
+  swal({
+    title: 'Create new user',
+    icon: 'info',
+    content: div,
+    buttons: {
+      cancel: true,
+      confirm: {
+        closeModal: false
+      }
+    }
+  }).then(proceed => {
+    if (!proceed) return
+
+    axios.post('api/users/create', {
+      username: document.querySelector('#swalUsername').value,
+      password: document.querySelector('#swalPassword').value,
+      group: document.querySelector('#swalGroup').value
+    }).then(response => {
+      if (!response) return
+
+      if (response.data.success === false)
+        if (response.data.description === 'No token provided') {
+          return page.verifyToken(page.token)
+        } else {
+          return swal('An error occurred!', response.data.description, 'error')
+        }
+
+      const div = document.createElement('div')
+      div.innerHTML = `
+        <p>Username: <b>${response.data.username}</b></p>
+        <p>Password: <code>${response.data.password}</code></p>
+        <p>User group: <b>${response.data.group}</b></p>
+      `
+      swal({
+        title: 'Created a new user!',
+        icon: 'success',
+        content: div
+      })
+
+      page.getUsers(page.views.users)
+    }).catch(page.onAxiosError)
   })
 }
 
@@ -2017,26 +2199,37 @@ page.editUser = id => {
           return swal('An error occurred!', response.data.description, 'error')
         }
 
-      if (response.data.password) {
-        const div = document.createElement('div')
-        div.innerHTML = `
-          <p><b>${user.username}</b>'s new password is:</p>
-          <p><code>${response.data.password}</code></p>
-        `
-        swal({
-          title: 'Success!',
-          icon: 'success',
-          content: div
-        })
-      } else if (response.data.update && response.data.update.username !== user.username) {
-        swal('Success!', `${user.username} was renamed into: ${response.data.update.username}.`, 'success')
-      } else {
-        swal('Success!', 'The user was edited!', 'success', {
-          buttons: false,
-          timer: 1500
-        })
+      let autoClose = true
+      const div = document.createElement('div')
+
+      let displayName = user.username
+      if (response.data.update.username !== user.username) {
+        div.innerHTML += `<p>${user.username} was renamed into: <b>${response.data.update.username}</b>.</p>`
+        autoClose = false
+        displayName = response.data.update.username
       }
 
+      if (response.data.update.password) {
+        div.innerHTML += `
+          <p>${displayName}'s new password is:</p>
+          <p><code>${response.data.update.password}</code></p>
+        `
+        autoClose = false
+      }
+
+      if (response.data.update.enabled !== user.enabled)
+        div.innerHTML += `<p>${displayName} has been ${response.data.update.enabled ? 'enabled' : 'disabled'}!</p>`
+
+      if (!div.innerHTML)
+        div.innerHTML = `<p>${displayName} was edited!</p>`
+
+      swal({
+        title: 'Success!',
+        icon: 'success',
+        content: div,
+        buttons: !autoClose,
+        timer: autoClose ? 1500 : null
+      })
       page.getUsers(page.views.users)
     }).catch(page.onAxiosError)
   })

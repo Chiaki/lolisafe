@@ -328,7 +328,7 @@ self.get = async (req, res, next) => {
     const files = await db.table('files')
       .select('name')
       .where('albumid', album.id)
-      .orderBy('id', 'DESC')
+      .orderBy('id', 'desc')
 
     for (const file of files) {
       file.file = `${config.domain}/${file.name}`

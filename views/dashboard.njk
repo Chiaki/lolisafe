@@ -23,6 +23,10 @@
 <script src="js/misc/utils.js{{ versions[1] }}"></script>
 {% endblock %}
 
+{% block endmeta %}
+{% include "_partial/noscript-refresh.njk" %}
+{% endblock %}
+
 {% block content %}
 {{ super() }}
 <section id="dashboard" class="section is-hidden">

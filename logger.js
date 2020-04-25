@@ -45,4 +45,9 @@ self.error = (content, options = {}) => {
   write(content, options)
 }
 
+self.debug = (...args) => {
+  for (const arg of args)
+    console.log(inspect(arg, { depth: Infinity }))
+}
+
 module.exports = self

@@ -43,11 +43,8 @@ hr {
 code,
 .message-body code {
   background-color: #000;
-  border-radius: 5px
-}
-
-.title {
-  color: #eff0f1
+  border-radius: 5px;
+  font-size: 1em
 }
 
 .subtitle {
@@ -56,6 +53,12 @@ code,
 
 .subtitle strong {
   color: #bdc3c7
+}
+
+.title,
+.subtitle.is-brighter,
+.subtitle.is-brighter strong {
+  color: #eff0f1
 }
 
 .input,
@@ -163,6 +166,35 @@ fieldset[disabled] .select select:hover {
 .message-body {
   color: #eff0f1;
   border: 0
+}
+
+/* floating button's bottom offset + height + bottom offset */
+.section.has-extra-bottom-padding {
+  padding-bottom: 6.5rem
+}
+
+a.floating-home-button {
+  display: flex;
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  border-radius: 100%;
+  background-color: #209cee;
+  color: white;
+  width: 3.5rem;
+  height: 3.5rem;
+  justify-content: center;
+  align-items: center;
+  transition: background-color 0.25s
+}
+
+a.floating-home-button:hover {
+  background-color: #67c3ff;
+  color: white
+}
+
+a.floating-home-button > .icon {
+  margin-top: -2px
 }
 
 /* https://github.com/philipwalton/flexbugs#flexbug-3 */

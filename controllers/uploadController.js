@@ -4,6 +4,7 @@ const fs = require('fs')
 const multer = require('multer')
 const path = require('path')
 const randomstring = require('randomstring')
+const searchQuery = require('search-query-parser')
 const paths = require('./pathsController')
 const perms = require('./permissionController')
 const utils = require('./utilsController')
@@ -536,11 +537,20 @@ self.cleanUpChunks = async (uuid) => {
 }
 
 self.scanFiles = async (req, user, infoMap) => {
-  if (user && utils.clamd.groupBypass && perms.is(user, utils.clamd.groupBypass))
+  // eslint-disable-next-line curly
+  if (user && utils.clamd.groupBypass && perms.is(user, utils.clamd.groupBypass)) {
+    // logger.log(`[ClamAV]: Skipping ${infoMap.length} file(s), ${utils.clamd.groupBypass} group bypass`)
     return false
+  }
 
   const foundThreats = []
   const results = await Promise.all(infoMap.map(async info => {
+    if (utils.clamd.whitelistExtensions && utils.clamd.whitelistExtensions.includes(info.data.extname))
+      return // logger.log(`[ClamAV]: Skipping ${info.data.filename}, extension whitelisted`)
+
+    if (utils.clamd.maxSize && info.data.size > utils.clamd.maxSize)
+      return // logger.log(`[ClamAV]: Skipping ${info.data.filename}, size ${info.data.size} > ${utils.clamd.maxSize}`)
+
     const reply = await utils.clamd.scanner.scanFile(info.path, utils.clamd.timeout, utils.clamd.chunkSize)
     if (!reply.includes('OK') || reply.includes('FOUND')) {
       // eslint-disable-next-line no-control-regex
@@ -749,54 +759,183 @@ self.list = async (req, res) => {
 
   const all = Boolean(req.headers.all)
   const filters = req.headers.filters
+  const minoffset = req.headers.minoffset
   const ismoderator = perms.is(user, 'moderator')
   if ((all || filters) && !ismoderator)
     return res.status(403).end()
 
   const basedomain = config.domain
 
-  // For filtering uploads
-  const _filters = {
+  const filterObj = {
     uploaders: [],
-    names: [],
-    ips: [],
-    flags: {
-      nouser: false,
-      noip: false
-    }
+    excludeUploaders: [],
+    queries: {
+      exclude: {}
+    },
+    flags: {}
   }
 
-  // Perhaps this can be simplified even further?
+  const sortObj = {
+    // Cast columns to specific type if they are stored differently
+    casts: {
+      size: 'integer'
+    },
+    // Columns mapping
+    maps: {
+      date: 'timestamp',
+      expiry: 'expirydate'
+    },
+    // Columns with which to use SQLite's NULLS LAST option
+    nullsLast: [
+      'userid',
+      'expirydate',
+      'ip'
+    ],
+    parsed: []
+  }
+
   if (filters) {
-    const usernames = []
-    filters
-      .split(' ')
-      .map((v, i, a) => {
-        if (/[^\\]\\$/.test(v) && a[i + 1]) {
-          const tmp = `${v.slice(0, -1)} ${a[i + 1]}`
-          a[i + 1] = ''
-          return tmp
+    const keywords = [
+      'ip',
+      'user'
+    ]
+    const ranges = [
+      'date',
+      'expiry'
+    ]
+    filterObj.queries = searchQuery.parse(filters, {
+      keywords: keywords.concat([
+        'sort'
+      ]),
+      ranges,
+      tokenize: true,
+      alwaysArray: true,
+      offsets: false
+    })
+
+    for (const key of keywords) {
+      let queryIndex = -1
+      let excludeIndex = -1
+
+      // Make sure keyword arrays only contain unique values
+      if (filterObj.queries[key]) {
+        filterObj.queries[key] = filterObj.queries[key].filter((v, i, a) => a.indexOf(v) === i)
+        queryIndex = filterObj.queries[key].indexOf('-')
+      }
+      if (filterObj.queries.exclude[key]) {
+        filterObj.queries.exclude[key] = filterObj.queries.exclude[key].filter((v, i, a) => a.indexOf(v) === i)
+        excludeIndex = filterObj.queries.exclude[key].indexOf('-')
+      }
+
+      // Flag to match NULL values
+      const inQuery = queryIndex !== -1
+      const inExclude = excludeIndex !== -1
+      if (inQuery || inExclude) {
+        // Prioritize exclude keys when both types found
+        filterObj.flags[`${key}Null`] = inExclude ? false : inQuery
+        if (inQuery) filterObj.queries[key].splice(queryIndex, 1)
+        if (inExclude) filterObj.queries.exclude[key].splice(excludeIndex, 1)
+      }
+    }
+
+    const parseDate = (date, minoffset, resetMs) => {
+      // [YYYY][/MM][/DD] [HH][:MM][:SS]
+      // e.g. 2020/01/01 00:00:00, 2018/01/01 06, 2019/11, 12:34:00
+      const match = date.match(/^(\d{4})?(\/\d{2})?(\/\d{2})?\s?(\d{2})?(:\d{2})?(:\d{2})?$/)
+
+      if (match) {
+        const offset = 60000 * (utils.timezoneOffset - minoffset)
+        const dateObj = new Date(Date.now() + offset)
+
+        if (match[1] !== undefined)
+          dateObj.setFullYear(Number(match[1]), // full year
+            match[2] !== undefined ? (Number(match[2].slice(1)) - 1) : 0, // month, zero-based
+            match[3] !== undefined ? Number(match[3].slice(1)) : 1) // date
+
+        if (match[4] !== undefined)
+          dateObj.setHours(Number(match[4]), // hours
+            match[5] !== undefined ? Number(match[5].slice(1)) : 0, // minutes
+            match[6] !== undefined ? Number(match[6].slice(1)) : 0) // seconds
+
+        if (resetMs)
+          dateObj.setMilliseconds(0)
+
+        // Calculate timezone differences
+        const newDateObj = new Date(dateObj.getTime() - offset)
+        return newDateObj
+      } else {
+        return null
+      }
+    }
+
+    // Parse dates to timestamps
+    for (const range of ranges)
+      if (filterObj.queries[range]) {
+        if (filterObj.queries[range].from) {
+          const parsed = parseDate(filterObj.queries[range].from, minoffset, true)
+          filterObj.queries[range].from = parsed ? Math.floor(parsed / 1000) : null
         }
-        return v.replace(/\\\\/, '\\')
-      })
-      .map((v, i) => {
-        const x = v.indexOf(':')
-        if (x >= 0 && v.substring(x + 1))
-          return [v.substring(0, x), v.substring(x + 1)]
-        else if (v.startsWith('-'))
-          return [v]
-      })
-      .forEach(v => {
-        if (!v) return
-        if (v[0] === 'user') usernames.push(v[1])
-        else if (v[0] === 'name') _filters.names.push(v[1])
-        else if (v[0] === 'ip') _filters.ips.push(v[1])
-        else if (v[0] === '-user') _filters.flags.nouser = true
-        else if (v[0] === '-ip') _filters.flags.noip = true
-      })
-    _filters.uploaders = await db.table('users')
-      .whereIn('username', usernames)
-      .select('id', 'username')
+        if (filterObj.queries[range].to) {
+          const parsed = parseDate(filterObj.queries[range].to, minoffset, true)
+          filterObj.queries[range].to = parsed ? Math.ceil(parsed / 1000) : null
+        }
+      }
+
+    // Query users table for user IDs
+    if (filterObj.queries.user || filterObj.queries.exclude.user) {
+      const usernames = []
+        .concat(filterObj.queries.user || [])
+        .concat(filterObj.queries.exclude.user || [])
+
+      const uploaders = await db.table('users')
+        .whereIn('username', usernames)
+        .select('id', 'username')
+
+      // If no matches, or mismatched results
+      if (!uploaders || (uploaders.length !== usernames.length)) {
+        const notFound = usernames.filter(username => {
+          return !uploaders.find(uploader => uploader.username === username)
+        })
+        if (notFound)
+          return res.json({
+            success: false,
+            description: `User${notFound.length === 1 ? '' : 's'} not found: ${notFound.join(', ')}.`
+          })
+      }
+
+      for (const uploader of uploaders)
+        if (filterObj.queries.user && filterObj.queries.user.includes(uploader.username))
+          filterObj.uploaders.push(uploader)
+        else
+          filterObj.excludeUploaders.push(uploader)
+
+      delete filterObj.queries.user
+      delete filterObj.queries.exclude.user
+    }
+
+    // Parse sort keys
+    if (filterObj.queries.sort) {
+      for (const obQuery of filterObj.queries.sort) {
+        const tmp = obQuery.toLowerCase().split(':')
+
+        let column = sortObj.maps[tmp[0]] || tmp[0]
+        let direction = 'asc'
+
+        if (sortObj.casts[column])
+          column = `cast (\`${column}\` as ${sortObj.casts[column]})`
+        if (tmp[1] && /^d/.test(tmp[1]))
+          direction = 'desc'
+
+        const suffix = sortObj.nullsLast.includes(column) ? ' nulls last' : ''
+        sortObj.parsed.push(`${column} ${direction}${suffix}`)
+      }
+
+      delete filterObj.queries.sort
+    }
+
+    // For some reason, single value won't be in Array even with 'alwaysArray' option
+    if (typeof filterObj.queries.exclude.text === 'string')
+      filterObj.queries.exclude.text = [filterObj.queries.exclude.text]
   }
 
   function filter () {
@@ -805,111 +944,181 @@ self.list = async (req, res) => {
     else if (!all)
       this.where('userid', user.id)
     else
-      // Fisrt, look for uploads matching ANY of the supplied 'user' OR 'ip' filters
-      // Then, refine the matches using the supplied 'name' filters
+      // Sheesh, these look too overbearing...
       this.where(function () {
-        if (_filters.uploaders.length)
-          this.orWhereIn('userid', _filters.uploaders.map(v => v.id))
-        if (_filters.ips.length)
-          this.orWhereIn('ip', _filters.ips)
-        if (_filters.flags.nouser)
+        // Filter uploads matching any of the supplied 'user' keys and/or NULL flag
+        // Prioritze exclude keys when both types found
+        if (filterObj.excludeUploaders.length)
+          this.orWhereNotIn('userid', filterObj.excludeUploaders.map(v => v.id))
+        else if (filterObj.uploaders.length)
+          this.orWhereIn('userid', filterObj.uploaders.map(v => v.id))
+        // Such overbearing logic for NULL values, smh...
+        if ((filterObj.excludeUploaders.length && filterObj.flags.userNull !== false) ||
+          (filterObj.uploaders.length && filterObj.flags.userNull) ||
+          (!filterObj.excludeUploaders.length && !filterObj.uploaders.length && filterObj.flags.userNull))
           this.orWhereNull('userid')
-        if (_filters.flags.noip)
+        else if (filterObj.flags.userNull === false)
+          this.orWhereNotNull('userid')
+      }).orWhere(function () {
+        // Filter uploads matching any of the supplied 'ip' keys and/or NULL flag
+        // Same prioritization logics as above
+        if (filterObj.queries.exclude.ip)
+          this.orWhereNotIn('ip', filterObj.queries.exclude.ip)
+        else if (filterObj.queries.ip)
+          this.orWhereIn('ip', filterObj.queries.ip)
+        // ...
+        if ((filterObj.queries.exclude.ip && filterObj.flags.ipNull !== false) ||
+          (filterObj.queries.ip && filterObj.flags.ipNull) ||
+          (!filterObj.queries.exclude.ip && !filterObj.queries.ip && filterObj.flags.ipNull))
           this.orWhereNull('ip')
+        else if (filterObj.flags.ipNull === false)
+          this.orWhereNotNull('ip')
       }).andWhere(function () {
-        for (const name of _filters.names)
+        // Then, refine using the supplied 'date' and/or 'expiry' ranges
+        if (filterObj.queries.date)
+          if (typeof filterObj.queries.date.from === 'number')
+            if (typeof filterObj.queries.date.to === 'number')
+              this.andWhereBetween('timestamp', [filterObj.queries.date.from, filterObj.queries.date.to])
+            else
+              this.andWhere('timestamp', '>=', filterObj.queries.date.from)
+          else
+            this.andWhere('timestamp', '<=', filterObj.queries.date.to)
+        if (filterObj.queries.expiry)
+          if (typeof filterObj.queries.expiry.from === 'number')
+            if (typeof filterObj.queries.expiry.to === 'number')
+              this.andWhereBetween('expirydate', [filterObj.queries.expiry.from, filterObj.queries.expiry.to])
+            else
+              this.andWhere('expirydate', '>=', filterObj.queries.date.from)
+          else
+            this.andWhere('expirydate', '<=', filterObj.queries.date.to)
+      }).andWhere(function () {
+        // Then, refine using the supplied keywords against their file names
+        if (!filterObj.queries.text) return
+        for (const name of filterObj.queries.text)
           if (name.includes('*'))
             this.orWhere('name', 'like', name.replace(/\*/g, '%'))
           else
-            this.orWhere('name', name)
+            // If no asterisks, assume partial
+            this.orWhere('name', 'like', `%${name}%`)
+      }).andWhere(function () {
+        // Finally, refine using the supplied exclusions against their file names
+        if (!filterObj.queries.exclude.text) return
+        for (const exclude of filterObj.queries.exclude.text)
+          if (exclude.includes('*'))
+            this.andWhere('name', 'not like', exclude.replace(/\*/g, '%'))
+          else
+            // If no asterisks, assume partial
+            this.andWhere('name', 'not like', `%${exclude}%`)
       })
   }
 
-  // Query uploads count for pagination
-  const count = await db.table('files')
-    .where(filter)
-    .count('id as count')
-    .then(rows => rows[0].count)
-  if (!count)
-    return res.json({ success: true, files: [], count })
+  try {
+    // Query uploads count for pagination
+    const count = await db.table('files')
+      .where(filter)
+      .count('id as count')
+      .then(rows => rows[0].count)
+    if (!count)
+      return res.json({ success: true, files: [], count })
 
-  let offset = req.params.page
-  if (offset === undefined) offset = 0
+    let offset = req.params.page
+    if (offset === undefined) offset = 0
 
-  const columns = ['id', 'name', 'userid', 'size', 'timestamp']
+    const columns = ['id', 'name', 'userid', 'size', 'timestamp']
+    if (temporaryUploads)
+      columns.push('expirydate')
 
-  if (temporaryUploads)
-    columns.push('expirydate')
+    // Only select IPs if we are listing all uploads
+    columns.push(all ? 'ip' : 'albumid')
 
-  // Only select IPs if we are listing all uploads
-  columns.push(all ? 'ip' : 'albumid')
+    const sortRaw = sortObj.parsed.length
+      ? sortObj.parsed.join(', ')
+      : '`id` desc'
+    const files = await db.table('files')
+      .where(filter)
+      .orderByRaw(sortRaw)
+      .limit(25)
+      .offset(25 * offset)
+      .select(columns)
 
-  const files = await db.table('files')
-    .where(filter)
-    .orderBy('id', 'DESC')
-    .limit(25)
-    .offset(25 * offset)
-    .select(columns)
-
-  if (!files.length)
-    return res.json({ success: true, files, count, basedomain })
-
-  for (const file of files) {
-    file.extname = utils.extname(file.name)
-    if (utils.mayGenerateThumb(file.extname))
-      file.thumb = `thumbs/${file.name.slice(0, -file.extname.length)}.png`
-  }
-
-  // If we are not listing all uploads, query album names
-  let albums = {}
-  if (!all) {
-    const albumids = files
-      .map(file => file.albumid)
-      .filter((v, i, a) => {
-        return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
-      })
-    albums = await db.table('albums')
-      .whereIn('id', albumids)
-      .where('enabled', 1)
-      .where('userid', user.id)
-      .select('id', 'name')
-      .then(rows => {
-        // Build Object indexed by their IDs
-        const obj = {}
-        for (const row of rows)
-          obj[row.id] = row.name
-        return obj
-      })
-  }
-
-  // If we are not listing all uploads, send response
-  if (!all)
-    return res.json({ success: true, files, count, albums, basedomain })
-
-  // Otherwise proceed to querying usernames
-  let _users = _filters.uploaders
-  if (!_users.length) {
-    const userids = files
-      .map(file => file.userid)
-      .filter((v, i, a) => {
-        return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
-      })
-
-    // If there are no uploads attached to a registered user, send response
-    if (userids.length === 0)
+    if (!files.length)
       return res.json({ success: true, files, count, basedomain })
 
-    // Query usernames of user IDs from currently selected files
-    _users = await db.table('users')
-      .whereIn('id', userids)
-      .select('id', 'username')
+    for (const file of files) {
+      file.extname = utils.extname(file.name)
+      if (utils.mayGenerateThumb(file.extname))
+        file.thumb = `thumbs/${file.name.slice(0, -file.extname.length)}.png`
+    }
+
+    // If we are not listing all uploads, query album names
+    let albums = {}
+    if (!all) {
+      const albumids = files
+        .map(file => file.albumid)
+        .filter((v, i, a) => {
+          return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
+        })
+      albums = await db.table('albums')
+        .whereIn('id', albumids)
+        .where('enabled', 1)
+        .where('userid', user.id)
+        .select('id', 'name')
+        .then(rows => {
+          // Build Object indexed by their IDs
+          const obj = {}
+          for (const row of rows)
+            obj[row.id] = row.name
+          return obj
+        })
+    }
+
+    // If we are not listing all uploads, send response
+    if (!all)
+      return res.json({ success: true, files, count, albums, basedomain })
+
+    // Otherwise proceed to querying usernames
+    let usersTable = filterObj.uploaders
+    if (!usersTable.length) {
+      const userids = files
+        .map(file => file.userid)
+        .filter((v, i, a) => {
+          return v !== null && v !== undefined && v !== '' && a.indexOf(v) === i
+        })
+
+      // If there are no uploads attached to a registered user, send response
+      if (userids.length === 0)
+        return res.json({ success: true, files, count, basedomain })
+
+      // Query usernames of user IDs from currently selected files
+      usersTable = await db.table('users')
+        .whereIn('id', userids)
+        .select('id', 'username')
+    }
+
+    const users = {}
+    for (const user of usersTable)
+      users[user.id] = user.username
+
+    return res.json({ success: true, files, count, users, basedomain })
+  } catch (error) {
+    // If moderator, capture SQLITE_ERROR and use its error message for the response's description
+    let errorString
+    if (ismoderator && error.code === 'SQLITE_ERROR') {
+      const match = error.message.match(/SQLITE_ERROR: .*$/)
+      errorString = match && match[0]
+    }
+
+    // If not proper SQLITE_ERROR, log to console
+    if (!errorString) {
+      logger.error(error)
+      res.status(500) // Use 500 status code
+    }
+
+    return res.json({
+      success: false,
+      description: errorString || 'An unexpected error occurred. Try again?'
+    })
   }
-
-  const users = {}
-  for (const user of _users)
-    users[user.id] = user.username
-
-  return res.json({ success: true, files, count, users, basedomain })
 }
 
 module.exports = self
