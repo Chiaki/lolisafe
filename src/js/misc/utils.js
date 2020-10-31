@@ -4,39 +4,42 @@
 lsKeys.siBytes = 'siBytes'
 
 page.prepareShareX = () => {
-  const values = page.token ? {
-    token: page.token || '',
-    albumid: page.album || ''
-  } : {}
-  values.filelength = page.fileLength || ''
-  values.age = page.uploadAge || ''
-  values.striptags = page.stripTags || ''
+  const sharexElement = document.querySelector('#ShareX')
+  if (!sharexElement) return
 
-  const headers = []
-  const keys = Object.keys(values)
-  for (let i = 0; i < keys.length; i++)
-    // Pad by 4 space
-    headers.push(`    "${keys[i]}": "${values[keys[i]]}"`)
+  const headers = {}
 
-  const origin = (location.hostname + location.pathname).replace(/\/(dashboard)?$/, '')
+  if (page.token) {
+    headers.token = page.token || ''
+    headers.albumid = page.album || ''
+  }
+
+  headers.filelength = page.fileLength || ''
+  headers.age = page.uploadAge || ''
+  headers.striptags = page.stripTags || ''
+
+  const origin = (window.location.host + window.location.pathname).replace(/\/(dashboard)?$/, '')
   const originClean = origin.replace(/\//g, '_')
 
-  const sharexElement = document.querySelector('#ShareX')
-  const sharexFile = `{
-  "Name": "${originClean}",
-  "DestinationType": "ImageUploader, FileUploader",
-  "RequestMethod": "POST",
-  "RequestURL": "${location.protocol}//${origin}/api/upload",
-  "Headers": {
-${headers.join(',\n')}
-  },
-  "Body": "MultipartFormData",
-  "FileFormName": "files[]",
-  "URL": "$json:files[0].url$",
-  "ThumbnailURL": "$json:files[0].url$"
-}`
+  const sharexConfObj = {
+    Name: originClean,
+    DestinationType: 'ImageUploader, FileUploader',
+    RequestMethod: 'POST',
+    RequestURL: `${window.location.protocol}//${origin}/api/upload`,
+    Headers: headers,
+    Body: 'MultipartFromData',
+    FileFormName: 'files[]',
+    URL: '$json:files[0].url$',
+    ThumbnailURL: '$json:files[0].url$'
+  }
 
-  const sharexBlob = new Blob([sharexFile], { type: 'application/octet-binary' })
+  /*
+  if (page.token)
+    sharexConfObj.DeletionURL = '$json:files[0].deleteUrl$'
+  */
+
+  const sharexConfStr = JSON.stringify(sharexConfObj, null, 2)
+  const sharexBlob = new Blob([sharexConfStr], { type: 'application/octet-binary' })
   /* eslint-disable-next-line compat/compat */
   sharexElement.setAttribute('href', URL.createObjectURL(sharexBlob))
   sharexElement.setAttribute('download', `${originClean}.sxcu`)
@@ -73,20 +76,37 @@ page.getPrettyBytes = num => {
   return `${neg}${numStr} ${pre}B`
 }
 
+page.getPrettyUptime = seconds => {
+  const days = Math.floor(seconds / 86400)
+  seconds %= 86400
+  let hours = Math.floor(seconds / 3600)
+  seconds %= 3600
+  let minutes = Math.floor(seconds / 60)
+  seconds %= 60
+
+  if (hours < 10) hours = '0' + hours
+  if (minutes < 10) minutes = '0' + minutes
+  if (seconds < 10) seconds = '0' + seconds
+
+  if (days > 0) {
+    return days + 'd ' + hours + ':' + minutes + ':' + seconds
+  } else {
+    return hours + ':' + minutes + ':' + seconds
+  }
+}
+
 page.escape = string => {
   // MIT License
   // Copyright(c) 2012-2013 TJ Holowaychuk
   // Copyright(c) 2015 Andreas Lubbe
   // Copyright(c) 2015 Tiancheng "Timothy" Gu
 
-  if (!string)
-    return string
+  if (!string) return string
 
   const str = String(string)
   const match = /["'&<>]/.exec(str)
 
-  if (!match)
-    return str
+  if (!match) return str
 
   let escape
   let html = ''
@@ -114,8 +134,9 @@ page.escape = string => {
         continue
     }
 
-    if (lastIndex !== index)
+    if (lastIndex !== index) {
       html += str.substring(lastIndex, index)
+    }
 
     lastIndex = index + 1
     html += escape

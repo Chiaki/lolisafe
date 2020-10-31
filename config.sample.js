@@ -24,9 +24,19 @@ module.exports = {
 
     Both cases require you to type the domain where the files will be served on the `domain` key below.
     Which one you use is ultimately up to you.
+
+    NOTE: Set to falsy value if using Docker.
   */
   serveFilesWithNode: false,
   domain: 'https://lolisafe.moe',
+
+  /*
+    If you serve files with node, you can optionally choose to set Content-Disposition header
+    into their original file names. This allows users to save files into their original file names.
+
+    This will query the DB every time users access uploaded files as there's no caching mechanism.
+  */
+  setContentDisposition: false,
 
   /*
     If you are serving your files with a different domain than your lolisafe homepage,
@@ -37,6 +47,7 @@ module.exports = {
 
   /*
     Port on which to run the server.
+    NOTE: Change port in .env file if using Docker.
   */
   port: 9999,
 
@@ -44,6 +55,15 @@ module.exports = {
     Pages to process for the frontend.
   */
   pages: ['home', 'auth', 'dashboard', 'faq'],
+
+  /*
+    This will load public/libs/cookieconsent/cookieconsent.min.{css,js} on homepage (configured from home.js).
+    You may use this if you have some specific needs, since lolisafe by itself will not use Cookies at all.
+    Instead it will use Local Storage for both authentication and preferences/states in Dashboard.
+    I'm not sure if Cookies Laws apply to Local Storage as well, although I suppose it makes sense if they do.
+    NOTE: Enabling this will automatically push 'cookiepolicy' to pages array above.
+  */
+  cookiePolicy: false,
 
   /*
     This can be either 'blacklist' or 'whitelist', which should be self-explanatory.
@@ -198,6 +218,36 @@ module.exports = {
     maxSize: '512MB',
 
     /*
+      Chunk size for chunked uploads. Needs to be in MB.
+
+      If this is enabled, every files uploaded from the homepage uploader
+      will forcibly be chunked by the size specified in "default".
+      Users can configure the chunk size they want from the homepage uploader,
+      but you can force allowed max size of each chunk with "max".
+      Min size will always be 1MB.
+
+      Users will still be able to upload bigger files with the API
+      as long as they don't surpass the limit specified in the "maxSize" option above.
+      Once all chunks have been uploads, their total size
+      will be tested against the "maxSize" option again.
+
+      With "timeout", you can specify how long a particular chunked upload attempt
+      can remain inactive before their temporary data gets cleared out
+      (partially uploaded files or other internal data).
+
+      This option is mainly useful for hosters that use Cloudflare,
+      since Cloudflare limits upload size to 100MB on their Free plan.
+      https://support.cloudflare.com/hc/en-us/articles/200172516#h_51422705-42d0-450d-8eb1-5321dcadb5bc
+
+      NOTE: Set "default" or the option itself to falsy value to disable chunked uploads.
+    */
+    chunkSize: {
+      max: '95MB',
+      default: '25MB',
+      timeout: 30 * 60 * 1000 // 30 minutes
+    },
+
+    /*
       Max file size allowed for upload by URLs. Needs to be in MB.
       NOTE: Set to falsy value to disable upload by URLs.
     */
@@ -294,7 +344,7 @@ module.exports = {
       https://github.com/NingLin-P/clamdjs#scannerscanfilepath-timeout-chunksize
 
       groupBypass: Name of the lowest ranked group whose files will not be scanned.
-      Lowest ranked meanning that group AND any groups higher than it are included.
+      Lowest ranked meaning that group AND any groups higher than it are included.
       Example: 'moderator' = moderators, admins & superadmins.
     */
     scan: {
@@ -333,16 +383,6 @@ module.exports = {
     storeIP: true,
 
     /*
-      Chunk size for chunk uploads. Needs to be in MB.
-      If this is enabled, every files uploaded from the homepage uploader will forcibly be chunked
-      by the size specified in "chunkSize". People will still be able to upload bigger files with
-      the API as long as they don't surpass the limit specified in the "maxSize" option above.
-      Total size of the whole chunks will also later be checked against the "maxSize" option.
-      NOTE: Set to falsy value to disable chunked uploads.
-    */
-    chunkSize: '10MB',
-
-    /*
       The length of the randomly generated identifier for uploaded files.
       If "force" is set to true, files will always use "default".
     */
@@ -375,7 +415,21 @@ module.exports = {
 
       Unless you do not use thumbnails, it is highly recommended to enable this feature.
     */
-    cacheFileIdentifiers: true,
+    cacheFileIdentifiers: false,
+
+    /*
+      An alternative to caching file identifiers.
+
+      Basically the service will instead query the database for stricter collision checks.
+      Right off the bat this has the disadvantage of adding one or more SQL queries on every
+      new uploads, but it has the advantage of not having to pre-cache anything.
+      Essentially this reduces the service's startup time and memory usage, but slows down new uploads.
+
+      As this is an alternative, you need to disable cacheFileIdentifiers to use this.
+
+      You'll have to figure out which method suits your use case best.
+    */
+    queryDbForFileCollisions: true,
 
     /*
       The length of the randomly generated identifier for albums.
@@ -398,7 +452,8 @@ module.exports = {
     generateThumbs: {
       image: true,
       video: false,
-      placeholder: null
+      placeholder: null,
+      size: 200
     },
 
     /*
@@ -459,22 +514,35 @@ module.exports = {
 
     /*
       If you have a Page Rule in Cloudflare to cache everything in the album zip
-      API route (homeDomain/api/album/zip/*), with this option you can limit the
+      API route (e.g. homeDomain/api/album/zip/*), with this option you can limit the
       maximum total size of files in an album that can be zipped.
-      Cloudflare will not cache files bigger than 512MB.
+      It's worth nothing that Cloudflare will not cache files bigger than 512MB.
+      However, it's not recommended to do that in high-bandwidth sites anyway,
+      since long-caching of such huge files are against Cloudflare's Terms of Service.
       NOTE: Set to falsy value to disable max total size.
     */
     zipMaxTotalSize: '512MB',
 
     /*
-      If you want to make it automatically call Cloudflare's API to purge cache on file delete,
-      fill your API key, email and your site's zone ID below, then set "purgeCache" to true.
-      This will only purge cache of the deleted file and its associated thumb.
+      If you want the service to automatically use Cloudflare API to purge cache on file deletion,
+      fill your zone ID below. It will only purge cache of the deleted file, and its thumbs if applicable.
+      Afterwards, you will have to choose any of the supported auth methods, which are:
+      API token, user service key, OR API key + email.
+      If more than one are provided, it will use the first one from left to right, but it will NOT
+      attempt to use the next methods even if the selected one fails (meaning there's no fallback mechanism).
+      Consult https://api.cloudflare.com/#getting-started-requests for differences.
+      API token configuration example: https://github.com/BobbyWibowo/lolisafe/pull/216#issue-440389284.
+      After everything is ready, you can then set "purgeCache" to true.
     */
-    apiKey: '',
-    email: '',
     zoneId: '',
-    purgeCache: false
+    purgeCache: false,
+
+    apiToken: '',
+
+    userServiceKey: '',
+
+    apiKey: '',
+    email: ''
   },
 
   /*
@@ -487,8 +555,8 @@ module.exports = {
   cacheControl: false,
 
   /*
-    Enable Linux-only disk stats in Dashboard's Statistics.
-    This will use a combination of both "du" and "df" binaries.
+    Enable Linux-only extended disk stats in Dashboard's Statistics.
+    This will use "du" binary to query disk usage of each directories within uploads directory.
     Disabled by default as I personally found it to be very slow with +100k uploads
     with my ancient potato server.
   */

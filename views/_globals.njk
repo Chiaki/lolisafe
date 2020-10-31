@@ -4,7 +4,24 @@
 {% set keywords = "upload,lolisafe,file,images,hosting,bobby,fiery" %}
 
 {# Used in home.njk and nojs.njk #}
-{% set home_subtitle = "A <strong>modern</strong> self-hosted file upload service" %}
+{% set home_subtitle = "A <strong>modern</strong> self-hosted file upload service" %} {# HTML supported #}
+
+{# Used in faq.njk and cookiepolicy.njk #}
+{% set root_domain = "fiery.me" %}
+{% set whole_faq = root_domain + " website and sub-domains" %}
+{% set whole_cookie = "This site and " + root_domain + " website and sub-domains" %}
+{% set email = "bobby@fiery.me" %}
+
+{% set fork_repo = "https://github.com/BobbyWibowo/lolisafe" %}
+{% set fork_host = "GitHub" %}
+{% set fork_issues = fork_repo + "/issues/new/choose" %}
+
+{% set takedowns_url = "https://safe.fiery.me/takedowns" %}
+{% set server_location = "Paris, <strong>France</strong>" %} {# HTML supported #}
+{% set support = 'Thanks! You can become a patron on my <a href="https://www.patreon.com/bobbywibowo" target="_blank" rel="noopener">Patreon</a>!' %} {# HTML supported #}
+
+{% set enable_faq_banned_categories = true %}
+{% set enable_faq_tor = true %}
 
 {#
   These are the footer links in the homepage and the No-JS uploader (home.njk & nojs.njk respectively).
