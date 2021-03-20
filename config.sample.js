@@ -39,6 +39,14 @@ module.exports = {
   setContentDisposition: false,
 
   /*
+    If you serve files with node, you can optionally choose to
+    override Content-Type header for certain extension names.
+  */
+  overrideContentTypes: {
+    // 'text/plain': ['html', 'htm', 'shtml', 'xhtml']
+  },
+
+  /*
     If you are serving your files with a different domain than your lolisafe homepage,
     then fill this option with your lolisafe homepage, otherwise any falsy value.
     This will be used when listing album links in the dashboard.
@@ -248,6 +256,12 @@ module.exports = {
     },
 
     /*
+      Folder where in-progress chunks should be kept temporarily.
+      NOTE: When set to falsy value, defaults to "chunks" subfolder within uploads folder.
+    */
+    chunksFolder: null,
+
+    /*
       Max file size allowed for upload by URLs. Needs to be in MB.
       NOTE: Set to falsy value to disable upload by URLs.
     */
@@ -340,8 +354,7 @@ module.exports = {
     temporaryUploadsInterval: 1 * 60000, // 1 minute
 
     /*
-      Scan files using ClamAV through clamd.
-      https://github.com/NingLin-P/clamdjs#scannerscanfilepath-timeout-chunksize
+      Scan uploads for threats with ClamAV.
 
       groupBypass: Name of the lowest ranked group whose files will not be scanned.
       Lowest ranked meaning that group AND any groups higher than it are included.
@@ -349,12 +362,6 @@ module.exports = {
     */
     scan: {
       enabled: false,
-
-      ip: '127.0.0.1',
-      port: 3310,
-      timeout: 180 * 1000,
-      chunkSize: 64 * 1024,
-
       groupBypass: 'admin', // Other group names in controllers/permissionController.js
       whitelistExtensions: null, /* [
         '.webp',
@@ -372,7 +379,27 @@ module.exports = {
         '.mov',
         '.mkv'
       ], */
-      maxSize: null // '25MB' // Needs to be in MB
+      // Make sure maxSize is no bigger than the max size you configured for your ClamAV
+      maxSize: null, // Needs to be in MB
+
+      // https://github.com/kylefarris/clamscan/tree/v1.3.3#getting-started
+      // Breaking options (do not use): remove_infected, quarantine_infected
+      // Untested options (may work): scan_log, debug_mode, file_list, scan_recursively
+      // Supported options: clamscan, clamdscan, preference
+      clamOptions: {
+        // clamscan: {},
+        clamdscan: {
+          // When both socket and host+port are specified, it will only use socket
+          socket: '/var/run/clamav/clamd.ctl',
+          host: '127.0.0.1',
+          port: 3310,
+          timeout: 1 * 60 * 1000, // 1 minute
+          multiscan: true,
+          reload_db: false,
+          active: true
+        },
+        preference: 'clamdscan'
+      }
     },
 
     /*
@@ -447,11 +474,11 @@ module.exports = {
     /*
       Thumbnails are only used in the dashboard and album's public pages.
       You need to install a separate binary called ffmpeg (https://ffmpeg.org/) for video thumbnails.
-      NOTE: Placeholder defaults to 'public/images/unavailable.png'.
     */
     generateThumbs: {
       image: true,
       video: false,
+      // Placeholder defaults to 'public/images/unavailable.png'.
       placeholder: null,
       size: 200
     },
@@ -476,7 +503,14 @@ module.exports = {
     stripTags: {
       default: false,
       video: false,
-      force: false
+      force: false,
+      // Supporting the extensions below requires using custom globally-installed libvips.
+      // https://sharp.pixelplumbing.com/install#custom-libvips
+      blacklistExtensions: [
+        // GIFs require libvips compiled with ImageMagick/GraphicsMagick support.
+        // https://sharp.pixelplumbing.com/api-output#gif
+        '.gif'
+      ]
     },
 
     /*
@@ -553,14 +587,6 @@ module.exports = {
     2: When NOT using Cloudflare
   */
   cacheControl: false,
-
-  /*
-    Enable Linux-only extended disk stats in Dashboard's Statistics.
-    This will use "du" binary to query disk usage of each directories within uploads directory.
-    Disabled by default as I personally found it to be very slow with +100k uploads
-    with my ancient potato server.
-  */
-  linuxDiskStats: false,
 
   /*
     Folder where to store logs.
